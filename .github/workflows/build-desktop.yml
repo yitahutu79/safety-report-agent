@@ -45,7 +45,7 @@ jobs:
         with:
           name: safety-report-agent-${{ matrix.artifact }}
           path: |
-            dist/安全设施设计报告工作台-v0.9.0-*.zip
-            dist/交付包-v0.9.0-*.tar.gz
+            dist/*.zip
+            dist/*.tar.gz
             dist/*.sha256
           if-no-files-found: error
