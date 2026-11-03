@@ -6,6 +6,7 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import json
+import logging
 import mimetypes
 import os
 from pathlib import Path
@@ -44,12 +45,12 @@ PROFILE = ROOT / 'reference/profile.json'
 
 
 def load(path, default=None):
-    return json.loads(path.read_text()) if path.exists() else default
+    return json.loads(path.read_text(encoding='utf-8')) if path.exists() else default
 
 
 def save(path, value):
     temporary = path.with_suffix('.tmp')
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2))
+    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
     temporary.replace(path)
 
 
@@ -221,6 +222,7 @@ def job(target, operation, use_llm=False, model=None, chapter_ids=None, instruct
     except provider.GenerationCancelled:
         state_update(target, busy=False, cancel_requested=False, current_operation='', message='已停止生成；未完成内容已丢弃，上一版草稿保留', error='')
     except Exception as exc:
+        logging.exception('后台任务失败：%s', operation)
         message = str(exc) if isinstance(exc, ValueError) else '处理失败，原草稿已保留；请检查资料或联系管理员查看日志'
         state_update(target, busy=False, cancel_requested=False, current_operation='', message=message, error=message)
     finally:

@@ -23,7 +23,7 @@ def draw_flow(steps, directory):
         if i < len(steps) - 1:
             svg += f'<path d="M360 {y + 82}V{y + 110}m-6 -6l6 6 6 -6" stroke="#334155" fill="none" stroke-width="2"/>'
     svg += '</svg>'
-    (directory / 'flow.svg').write_text(svg)
+    (directory / 'flow.svg').write_text(svg, encoding='utf-8')
     # SVG 可直接下载；安装 Pillow 后同时输出可嵌入 Word 的 PNG。
     try:
         from PIL import Image, ImageDraw, ImageFont
@@ -82,5 +82,5 @@ def static_map(location, address, directory):
     (directory / 'map.png').write_bytes(data)
     (directory / 'map.json').write_text(json.dumps({'provider': '高德地图', 'address': address, 'location': location,
         'coordinate_system': 'GCJ-02', 'zoom': 14, 'captured_at': datetime.now(timezone.utc).isoformat(),
-        'source': 'https://lbs.amap.com/api/webservice/guide/api/staticmaps'}, ensure_ascii=False, indent=2))
+        'source': 'https://lbs.amap.com/api/webservice/guide/api/staticmaps'}, ensure_ascii=False, indent=2), encoding='utf-8')
     return {'file': 'map.png', 'message': '地图已保存；坐标点不能用于确定厂界、间距或规范符合性'}

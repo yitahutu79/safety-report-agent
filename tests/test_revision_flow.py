@@ -46,8 +46,8 @@ class RevisionUnitTests(unittest.TestCase):
         self.assertTrue(result[0]['changed'])
 
     def test_incremental_parse_reuses_existing_file(self):
-        old = self.root / 'old.txt'; old.write_text('建设单位：测试公司')
-        new = self.root / 'new.txt'; new.write_text('项目名称：测试项目')
+        old = self.root / 'old.txt'; old.write_text('建设单位：测试公司', encoding='utf-8')
+        new = self.root / 'new.txt'; new.write_text('项目名称：测试项目', encoding='utf-8')
         previous = pipeline.analyze([old])
         with patch('safety_report.pipeline.parse_file', wraps=parse_file) as parser:
             result = pipeline.analyze([old, new], previous)

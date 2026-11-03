@@ -44,8 +44,8 @@ class PipelineTests(unittest.TestCase):
 
     def test_conflicting_values_require_manual_choice(self):
         a, b = self.root / 'a.txt', self.root / 'b.txt'
-        a.write_text('建设单位：甲公司\n生产规模：100吨/年')
-        b.write_text('建设单位：乙公司\n生产规模：200吨/年')
+        a.write_text('建设单位：甲公司\n生产规模：100吨/年', encoding='utf-8')
+        b.write_text('建设单位：乙公司\n生产规模：200吨/年', encoding='utf-8')
         analysis = analyze([a, b])
         field = analysis['fields'][0]
         self.assertTrue(field['conflict'])
@@ -55,7 +55,7 @@ class PipelineTests(unittest.TestCase):
 
     def test_evidence_ids_are_reproducible(self):
         path = self.root / '资料.txt'
-        path.write_text('建设单位：测试公司')
+        path.write_text('建设单位：测试公司', encoding='utf-8')
         self.assertEqual(parse_file(path)['chunks'], parse_file(path)['chunks'])
 
     def test_irrelevant_evidence_is_not_selected(self):
@@ -109,8 +109,8 @@ class PipelineTests(unittest.TestCase):
             draw_flow(['只有一步'], self.root)
         with patch.dict(os.environ, {'CJK_FONT': '/not-a-font'}):
             draw_flow(['A<script>', 'B&步骤'], self.root)
-        ET.fromstring((self.root / 'flow.svg').read_text())
-        self.assertNotIn('<script>', (self.root / 'flow.svg').read_text())
+        ET.fromstring((self.root / 'flow.svg').read_text(encoding='utf-8'))
+        self.assertNotIn('<script>', (self.root / 'flow.svg').read_text(encoding='utf-8'))
 
 
 class HTTPTests(unittest.TestCase):

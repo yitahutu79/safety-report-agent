@@ -17,7 +17,7 @@ PRESETS = [
 
 def read(data):
     path = Path(data) / 'settings.json'
-    result = json.loads(path.read_text()) if path.exists() else {'models': [], 'default_model_id': ''}
+    result = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {'models': [], 'default_model_id': ''}
     if configured() and not any(m['id'] == 'environment' for m in result['models']):
         result['models'].append(environment_config())
         if not result['default_model_id']:
@@ -72,7 +72,7 @@ def save_model(data, values):
         path = Path(data) / 'settings.json'
         temporary = path.with_suffix('.tmp')
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, 'w') as output:
+        with os.fdopen(fd, 'w', encoding='utf-8') as output:
             json.dump(result, output, ensure_ascii=False, indent=2)
         os.chmod(temporary, 0o600)
         temporary.replace(path)

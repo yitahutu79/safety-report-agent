@@ -25,7 +25,7 @@ def history(target):
     result = []
     for path in (Path(target) / 'versions').glob('*/meta.json'):
         try:
-            result.append(json.loads(path.read_text()))
+            result.append(json.loads(path.read_text(encoding='utf-8')))
         except (ValueError, OSError):
             continue
     return sorted(result, key=lambda r: r['created_at'], reverse=True)
@@ -34,7 +34,7 @@ def history(target):
 def load_report(target, ident=None):
     directory = version_directory(target, ident) if ident else Path(target)
     path = directory / 'report.json'
-    return json.loads(path.read_text()) if path.exists() else None
+    return json.loads(path.read_text(encoding='utf-8')) if path.exists() else None
 
 
 def audit(report):
@@ -102,13 +102,13 @@ def commit(target, report, export, kind='generation', description=''):
     temp.mkdir(parents=True)
     try:
         export(report, temp / 'report.docx')
-        (temp / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2))
-        (temp / 'review.json').write_text(json.dumps(audit(report), ensure_ascii=False, indent=2))
-        (temp / 'review.html').write_text(review_html(report))
+        (temp / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+        (temp / 'review.json').write_text(json.dumps(audit(report), ensure_ascii=False, indent=2), encoding='utf-8')
+        (temp / 'review.html').write_text(review_html(report), encoding='utf-8')
         meta = {'id': ident, 'created_at': datetime.now(timezone.utc).isoformat(), 'kind': kind,
                 'description': description[:200], 'mode': report.get('mode', 'legacy'), 'model_name': report.get('model_name', ''),
                 'updated_chapters': report.get('updated_chapters', []), 'status': report.get('status', 'draft')}
-        (temp / 'meta.json').write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+        (temp / 'meta.json').write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
         final = target / 'versions' / ident
         temp.rename(final)
         for name in ('report.docx', 'report.json', 'review.json', 'review.html'):
@@ -133,10 +133,10 @@ def preserve_legacy(target):
             shutil.copyfile(target / name, folder / name)
     report = load_report(target)
     if not (folder / 'review.html').exists():
-        (folder / 'review.html').write_text(review_html(report))
+        (folder / 'review.html').write_text(review_html(report), encoding='utf-8')
     (folder / 'meta.json').write_text(json.dumps({'id': ident, 'created_at': datetime.now(timezone.utc).isoformat(),
         'kind': 'legacy', 'description': '升级前的原始草稿（保留）', 'mode': report.get('mode', 'legacy'),
-        'model_name': '', 'updated_chapters': [], 'status': 'draft'}, ensure_ascii=False, indent=2))
+        'model_name': '', 'updated_chapters': [], 'status': 'draft'}, ensure_ascii=False, indent=2), encoding='utf-8')
 
 
 def apply_edits(report, changed_sections, add_chapter=None, delete_chapter_ids=None):

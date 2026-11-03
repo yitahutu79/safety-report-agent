@@ -68,7 +68,7 @@ def _start_service(port: int, data_dir: Path, log_path: Path) -> subprocess.Pope
     except subprocess.TimeoutExpired:
         child.kill()
     try:
-        details = log_path.read_text(errors='replace')[-3000:]
+        details = log_path.read_text(encoding='utf-8', errors='replace')[-3000:]
     except OSError:
         details = ''
     raise RuntimeError('本地服务未能启动。日志位置：' + str(log_path) + ('\n' + details if details else ''))

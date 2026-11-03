@@ -11,6 +11,10 @@ permissions:
 jobs:
   build:
     name: Build on ${{ matrix.os }}
+    env:
+      PYTHONUTF8: '1'
+      HF_HUB_OFFLINE: '1'
+      HF_HUB_DISABLE_TELEMETRY: '1'
     strategy:
       fail-fast: false
       matrix:
@@ -23,8 +27,8 @@ jobs:
             artifact: linux
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
           cache: pip

@@ -8,7 +8,7 @@ os.chdir(ROOT)
 # 本机启动也读取一次环境文件；页面保存的模型配置仍优先按任务选择。
 env_path = ROOT / '.env'
 if env_path.is_file():
-    for line in env_path.read_text().splitlines():
+    for line in env_path.read_text(encoding='utf-8').splitlines():
         line = line.strip()
         if not line or line.startswith('#') or '=' not in line:
             continue
