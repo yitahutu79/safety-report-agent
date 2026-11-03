@@ -78,7 +78,8 @@ class RevisionUnitTests(unittest.TestCase):
         public = settings.public(self.root)
         self.assertNotIn('private-test-key', json.dumps(public))
         self.assertTrue(public['models'][0]['key_saved'])
-        self.assertEqual(os.stat(self.root / 'settings.json').st_mode & 0o777, 0o600)
+        if os.name == 'posix':
+            self.assertEqual(os.stat(self.root / 'settings.json').st_mode & 0o777, 0o600)
         settings.save_model(self.root, {**data, 'id': ident, 'api_key': ''})
         self.assertEqual(settings.resolve(self.root, ident)['api_key'], 'private-test-key')
         config = settings.merge_input(self.root, {**data, 'id': ident, 'api_key': '', 'base_url': 'https://another.test/v1'})
