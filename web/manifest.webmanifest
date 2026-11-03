@@ -1,0 +1,12 @@
+{
+  "id": "/",
+  "name": "安全设施设计报告工作台",
+  "short_name": "安设智编",
+  "description": "面向安全技术人员的安全设施设计报告辅助编制工作台",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f4f7f5",
+  "theme_color": "#153b35",
+  "icons": [{"src": "/brand-mark.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}]
+}

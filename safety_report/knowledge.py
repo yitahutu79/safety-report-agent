@@ -1,0 +1,207 @@
+"""Company knowledge records with revision history and approved-only hybrid retrieval."""
+from __future__ import annotations
+
+from datetime import date, datetime, timezone
+import hashlib
+import json
+from pathlib import Path
+import re
+import threading
+import uuid
+
+from .documents import HybridEvidenceIndex
+
+CATEGORIES = {
+    'regulation': '法律法规与标准',
+    'chemical': '危险物料',
+    'hazard': '危险有害因素',
+    'analysis_rule': '分析规则与计算方法',
+    'safety_measure': '安全措施',
+    'report_rule': '报告编制规则',
+    'case': '历史案例',
+}
+STATUSES = {'draft', 'approved', 'retired'}
+FIELDS = ('category', 'title', 'content', 'source', 'source_url', 'applicability',
+          'version', 'effective_from', 'effective_to', 'validity_status')
+VALIDITY = {'current', 'unknown', 'superseded', 'repealed', 'not_applicable'}
+
+
+def _now():
+    return datetime.now(timezone.utc).isoformat(timespec='seconds')
+
+
+def _date(value, label):
+    if not value:
+        return ''
+    try:
+        return date.fromisoformat(value).isoformat()
+    except (TypeError, ValueError):
+        raise ValueError(label + '必须使用 YYYY-MM-DD 格式')
+
+
+class KnowledgeBase:
+    """A small file-backed KB suitable for the local prototype; writes are atomic."""
+    def __init__(self, path, index_path=None):
+        self.path = Path(path)
+        self.index_path = Path(index_path) if index_path else self.path.with_suffix('.qdrant')
+        self.lock = threading.RLock()
+        self.index = None
+        self.index_digest = ''
+        self.index_mode = 'empty'
+
+    def _read(self):
+        if not self.path.exists():
+            return {'schema_version': 1, 'records': []}
+        data = json.loads(self.path.read_text(encoding='utf-8'))
+        if not isinstance(data, dict) or not isinstance(data.get('records'), list):
+            raise ValueError('知识库数据文件格式无效')
+        return data
+
+    def _write(self, data):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temp = self.path.with_suffix(self.path.suffix + '.tmp')
+        temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+        temp.replace(self.path)
+
+    @staticmethod
+    def _clean(payload):
+        if not isinstance(payload, dict):
+            raise ValueError('知识条目必须为对象')
+        item = {key: str(payload.get(key, '')).strip() for key in FIELDS}
+        if item['category'] not in CATEGORIES:
+            raise ValueError('请选择有效的知识分类')
+        if not item['validity_status']:
+            item['validity_status'] = 'unknown' if item['category'] == 'regulation' else 'not_applicable'
+        if item['validity_status'] not in VALIDITY:
+            raise ValueError('请选择有效状态')
+        if item['category'] != 'regulation' and item['validity_status'] == 'current':
+            raise ValueError('只有法规和标准条目可以标记为“现行有效”')
+        if item['category'] == 'regulation' and item['validity_status'] == 'not_applicable':
+            raise ValueError('法规和标准条目需标记为现行、未知或已失效')
+        limits = {'title': 200, 'content': 30000, 'source': 300, 'source_url': 1000,
+                  'applicability': 1200, 'version': 120, 'effective_from': 10, 'effective_to': 10}
+        for key, maximum in limits.items():
+            if len(item[key]) > maximum:
+                raise ValueError(f'{key}超过长度限制')
+        for key, label in [('title', '标题'), ('content', '知识内容'), ('source', '来源')]:
+            if not item[key]:
+                raise ValueError('请填写' + label)
+        if item['source_url'] and not re.match(r'^https?://', item['source_url'], re.I):
+            raise ValueError('来源链接必须以 http:// 或 https:// 开头')
+        item['effective_from'] = _date(item['effective_from'], '生效日期')
+        item['effective_to'] = _date(item['effective_to'], '失效日期')
+        if item['effective_from'] and item['effective_to'] and item['effective_to'] < item['effective_from']:
+            raise ValueError('失效日期不能早于生效日期')
+        return item
+
+    def list(self, status=None, category=None):
+        with self.lock:
+            records = self._read()['records']
+            return [r for r in records if (not status or r.get('status') == status)
+                    and (not category or r.get('category') == category)]
+
+    def create(self, payload):
+        item = self._clean(payload)
+        timestamp = _now()
+        record = {'id': uuid.uuid4().hex, **item, 'status': 'draft', 'revision': 1,
+                  'created_at': timestamp, 'updated_at': timestamp, 'reviewed_by': '',
+                  'history': [], 'audit': [{'action': 'created', 'at': timestamp, 'status': 'draft'}]}
+        with self.lock:
+            data = self._read()
+            data['records'].append(record)
+            self._write(data)
+            self._invalidate_index()
+        return record
+
+    def update(self, ident, payload):
+        item = self._clean(payload)
+        with self.lock:
+            data = self._read()
+            record = next((r for r in data['records'] if r['id'] == ident), None)
+            if not record:
+                raise ValueError('没有找到知识条目')
+            record['history'].append({**{key: record.get(key, '') for key in FIELDS},
+                                      'revision': record['revision'], 'status': record['status'],
+                                      'updated_at': record['updated_at'], 'reviewed_by': record.get('reviewed_by', '')})
+            record.update(item, revision=record['revision'] + 1, updated_at=_now(),
+                          status='draft', reviewed_by='')
+            record['audit'].append({'action': 'revised; approval reset', 'at': record['updated_at'],
+                                    'revision': record['revision'], 'status': 'draft'})
+            self._write(data)
+            self._invalidate_index()
+            return record
+
+    def set_status(self, ident, status, reviewer=''):
+        if status not in STATUSES:
+            raise ValueError('知识状态无效')
+        reviewer = str(reviewer).strip()[:120]
+        if status == 'approved' and not reviewer:
+            raise ValueError('审核通过时请填写审核人')
+        with self.lock:
+            data = self._read()
+            record = next((r for r in data['records'] if r['id'] == ident), None)
+            if not record:
+                raise ValueError('没有找到知识条目')
+            if status == 'approved' and (not record.get('source') or not record.get('content')):
+                raise ValueError('缺少来源或知识内容，不能审核通过')
+            record.update(status=status, reviewed_by=reviewer if status == 'approved' else '', updated_at=_now())
+            record['audit'].append({'action': 'status_changed', 'at': record['updated_at'],
+                                    'revision': record['revision'], 'status': status,
+                                    'reviewed_by': record['reviewed_by']})
+            self._write(data)
+            self._invalidate_index()
+            return record
+
+    def _approved_chunks(self):
+        today = date.today()
+        chunks = []
+        for record in self._read()['records']:
+            if record.get('status') != 'approved':
+                continue
+            # Prevent outdated or unverified regulatory text from entering generation RAG.
+            if record.get('category') == 'regulation' and record.get('validity_status') != 'current':
+                continue
+            if record.get('effective_from') and date.fromisoformat(record['effective_from']) > today:
+                continue
+            if record.get('effective_to') and date.fromisoformat(record['effective_to']) < today:
+                continue
+            text = '\n'.join(filter(None, [record['title'], CATEGORIES[record['category']],
+                '适用范围：' + (record.get('applicability') or '未填写'),
+                '版本：' + (record.get('version') or '未填写'), record['content']]))
+            for part, offset in enumerate(range(0, len(text), 1800)):
+                body = text[offset:offset + 2200]
+                key = hashlib.sha256(f"{record['id']}:{record['revision']}:{part}:{body}".encode()).hexdigest()[:24]
+                chunks.append({'id': 'kb-' + key, 'knowledge_id': record['id'], 'revision': record['revision'],
+                    'category': record['category'], 'knowledge_status': record['status'], 'source': '知识库：' + record['title'],
+                    'source_document': record['source'], 'source_url': record.get('source_url', ''),
+                    'locator': f"审核版本 v{record['revision']} · {record.get('version') or '版本未注明'}",
+                    'applicability': record.get('applicability', ''),
+                    'effective_from': record.get('effective_from', ''), 'effective_to': record.get('effective_to', ''),
+                    'validity_status': record.get('validity_status', 'unknown'),
+                    'reviewed_by': record.get('reviewed_by', ''), 'corpus': 'approved_knowledge', 'offset': offset, 'text': body})
+        return chunks
+
+    def _invalidate_index(self):
+        self.index_digest = ''
+        if self.index:
+            self.index.close()
+            self.index = None
+
+    def search(self, query, limit=5):
+        query = str(query).strip()
+        if not query:
+            return []
+        with self.lock:
+            chunks = self._approved_chunks()
+            if not chunks:
+                self.index_mode = 'empty'
+                return []
+            digest = hashlib.sha256(''.join(c['id'] for c in chunks).encode()).hexdigest()
+            if digest != self.index_digest:
+                self._invalidate_index()
+                self.index = HybridEvidenceIndex(chunks, self.index_path, rebuild=True)
+                self.index_digest = digest
+            results = self.index.search(query, max(1, min(int(limit), 20)))
+            self.index_mode = 'hybrid_qdrant_rrf' if self.index.client else 'keyword_fallback'
+            return results
+

@@ -1,0 +1,4 @@
+-r requirements.txt
+pywebview>=6.2,<7
+pyinstaller>=6.22.3,<7
+pywebview[qt]>=6.2,<7; sys_platform == 'linux'

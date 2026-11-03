@@ -1,0 +1,16 @@
+services:
+  report-workbench:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8765:8765"
+    env_file: .env
+    environment:
+      APP_PASSWORD: ${APP_PASSWORD:?请在 .env 中设置 APP_PASSWORD}
+      DATA_DIR: /app/data
+    volumes:
+      - report-data:/app/data
+    security_opt:
+      - no-new-privileges:true
+volumes:
+  report-data:
