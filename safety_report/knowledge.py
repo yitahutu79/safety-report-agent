@@ -187,6 +187,11 @@ class KnowledgeBase:
             self.index.close()
             self.index = None
 
+    def close(self):
+        """Release the local vector store so Windows can move/delete its files."""
+        with self.lock:
+            self._invalidate_index()
+
     def search(self, query, limit=5):
         query = str(query).strip()
         if not query:

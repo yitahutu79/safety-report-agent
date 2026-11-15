@@ -129,6 +129,7 @@ class HTTPTests(unittest.TestCase):
         cls.http.shutdown()
         cls.http.server_close()
         cls.thread.join(timeout=5)
+        server.close_knowledge_stores(cls.temp.name)
         server.DATA = cls.old_data
         cls.temp.cleanup()
 

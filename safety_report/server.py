@@ -41,6 +41,16 @@ def knowledge_base():
     root = DATA.resolve()
     with LOCK:
         return _KNOWLEDGE_STORES.setdefault(str(root), KnowledgeBase(root / 'knowledge-base.json', root / 'knowledge' / 'qdrant'))
+
+
+def close_knowledge_stores(root=None):
+    """Close cached Qdrant handles, optionally only for one data directory."""
+    target = str(Path(root).resolve()) if root is not None else None
+    with LOCK:
+        keys = [key for key in _KNOWLEDGE_STORES if target is None or key == target]
+        stores = [_KNOWLEDGE_STORES.pop(key) for key in keys]
+    for store in stores:
+        store.close()
 PROFILE = ROOT / 'reference/profile.json'
 
 
@@ -697,6 +707,7 @@ def main():
     finally:
         server.server_close()
         POOL.shutdown(wait=False, cancel_futures=True)
+        close_knowledge_stores(DATA)
 
 
 if __name__ == '__main__':
