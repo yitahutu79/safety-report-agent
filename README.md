@@ -16,7 +16,7 @@ v0.6.0 在点击生成后自动按本次章节范围预检资料缺口；发现�
 
 ## Windows 独立运行
 
-Windows 10/11 首次使用时，先安装 Python 3.13，再双击根目录的 `初始化Windows环境.cmd`。当前 Windows 开发机优先使用 `E:\Python313\python.exe`，其他电脑可通过 Python Launcher 提供 `py -3.13`。初始化程序会在项目目录创建独立的 `.venv` 环境，安装 `requirements-dev.txt` 中记录的运行与测试依赖，并执行基础导入检查。该环境和依赖不会提交到 Git 仓库，也不会修改 Mac 的运行环境。
+Windows 10/11 首次使用时，先安装 Python 3.13，再双击根目录的 `初始化Windows环境.cmd`。当前 Windows 开发机优先使用 `E:\download\Python313\python.exe`，其他电脑可通过 Python Launcher 提供 `py -3.13`。初始化程序会在项目目录创建独立的 `.venv` 环境，安装 `requirements-dev.txt` 中记录的运行与测试依赖，并执行基础导入检查。该环境和依赖不会提交到 Git 仓库，也不会修改 Mac 的运行环境。
 
 初始化成功后，双击 `启动工作台-Windows.cmd`。启动入口在后台运行本项目的 Python 服务，等待页面就绪后打开 `http://127.0.0.1:8765`，运行日志保存在 `data/logs/windows-workbench.log`。使用结束并确认任务已完成后，双击 `停止工作台-Windows.cmd`；停止入口只结束本项目记录的进程，不会批量结束电脑上的其他 Python 程序。
 
