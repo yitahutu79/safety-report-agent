@@ -10,6 +10,8 @@ from langgraph.graph import END, START, StateGraph
 
 from . import provider
 from .provider import complete_json
+from .gptr_reviewer import ReviewerAgent
+from .gptr_curator import curate_sources
 
 
 class ChapterState(TypedDict, total=False):
@@ -21,9 +23,11 @@ class ChapterState(TypedDict, total=False):
     validate: Callable[[dict[str, Any]], list[str]]
     complete: Callable[..., dict[str, Any]]
     evidence: list[dict[str, Any]]
+    source_review: list[dict[str, str]]
     queries: list[str]
     draft: dict[str, Any]
     issues: list[str]
+    previous_issues: list[str]
     attempt: int
     events: list[dict[str, str]]
 
@@ -83,6 +87,22 @@ def run_chapter_graph(system: str, payload: dict[str, Any], model: dict[str, Any
                 break
         return {'evidence': found, 'events': state.get('events', []) + [{'agent': '证据检索工具', 'status': '补充 ' + str(added) + ' 条，本章证据共 ' + str(len(found)) + ' 条'}]}
 
+    def curate(state: ChapterState):
+        _check_cancel(state)
+        on_progress('GPT Researcher 资料筛选正在标注本章证据用途')
+        try:
+            selected = curate_sources(state['payload'].get('chapter', ''), state['evidence'],
+                                      state['model'], state['complete'], state.get('cancel_event'))
+            status = '已标注 ' + str(len(selected)) + ' 条证据用途，仍需人工核实'
+        except provider.GenerationCancelled:
+            raise
+        except ValueError:
+            _check_cancel(state)
+            selected = []
+            status = '资料筛选未返回有效结果，已保留全部原证据继续编写'
+        return {'source_review': selected, 'events': state.get('events', []) + [
+            {'agent': '资料筛选 Agent', 'status': status}]}
+
     def draft(state: ChapterState):
         _check_cancel(state)
         attempt = state.get('attempt', 0)
@@ -92,6 +112,8 @@ def run_chapter_graph(system: str, payload: dict[str, Any], model: dict[str, Any
             prompt += '\n审核 Agent 指出的质量问题：' + '；'.join(state.get('issues', [])[:12]) + '\n请从原始证据重新组织本章，只修复这些问题；不要虚构事实或删除必要引用。'
         draft_payload = dict(state['payload'])
         draft_payload['evidence'] = [{**item, 'text': item.get('text', '')[:1200]} for item in state['evidence']]
+        draft_payload['source_review'] = state.get('source_review', [])
+        prompt += '\nsource_review 是对证据相关性和待核对事项的辅助提示，不代表事实成立或法规有效；保留所有证据供核查，正文与引用必须经过独立核验。'
         result = state['complete'](prompt, draft_payload, state['model'], cancel_event=state.get('cancel_event'))
         return {'draft': result, 'events': state.get('events', []) + [{'agent': '报告撰写 Agent', 'status': '已生成初稿' if not attempt else '已完成一次定向返修'}]}
 
@@ -105,31 +127,53 @@ def run_chapter_graph(system: str, payload: dict[str, Any], model: dict[str, Any
         return {'issues': issues[:20], 'attempt': state.get('attempt', 0),
                 'events': state.get('events', []) + [{'agent': '质量审核 Agent', 'status': '发现 ' + str(len(issues)) + ' 项问题' if issues else '校验通过'}]}
 
+    def model_review(state: ChapterState):
+        _check_cancel(state)
+        on_progress('GPT Researcher 审稿流程正在核对正文与依据')
+        result = ReviewerAgent(state['complete']).run({
+            'task': {'chapter': state['payload'].get('chapter', ''),
+                     'guidelines': state['payload'].get('required_subsections', [])},
+            'draft': state['draft'], 'evidence': state['evidence'],
+            'model': state['model'], 'cancel_event': state.get('cancel_event'),
+            'revision_notes': state.get('previous_issues', [])})
+        issues = result['review']
+        return {'issues': issues, 'events': state.get('events', []) + [
+            {'agent': '证据审稿 Agent', 'status': '发现 ' + str(len(issues)) + ' 项待修改问题' if issues else '模型审稿未发现问题，仍需人工复核'}]}
+
+    def route_validation(state: ChapterState):
+        return 'route' if state.get('issues') else 'model_review'
+
     def route(state: ChapterState):
         if state.get('issues') and state.get('attempt', 0) < 1:
             return 'repair'
         return END
 
     def repair(state: ChapterState):
-        return {'attempt': state.get('attempt', 0) + 1}
+        return {'attempt': state.get('attempt', 0) + 1, 'previous_issues': state.get('issues', [])}
 
     graph = StateGraph(ChapterState)
     graph.add_node('plan', plan)
     graph.add_node('retrieve', retrieve)
     graph.add_node('draft', draft)
+    graph.add_node('curate', curate)
     graph.add_node('review', review)
     graph.add_node('repair', repair)
+    graph.add_node('model_review', model_review)
     graph.add_edge(START, 'plan')
     graph.add_edge('plan', 'retrieve')
-    graph.add_edge('retrieve', 'draft')
+    graph.add_edge('retrieve', 'curate')
+    graph.add_edge('curate', 'draft')
     graph.add_edge('draft', 'review')
-    graph.add_conditional_edges('review', route, {'repair': 'repair', END: END})
+    graph.add_conditional_edges('review', route_validation, {'route': 'route_review', 'model_review': 'model_review'})
+    graph.add_node('route_review', lambda state: {})
+    graph.add_conditional_edges('route_review', route, {'repair': 'repair', END: END})
+    graph.add_conditional_edges('model_review', route, {'repair': 'repair', END: END})
     graph.add_edge('repair', 'draft')
     result = graph.compile().invoke(
         {'system': system, 'payload': payload, 'model': model,
          'cancel_event': cancel_event, 'search': search, 'validate': validate, 'complete': complete,
          'evidence': payload.get('evidence', []), 'attempt': 0, 'events': []},
-        config={'recursion_limit': 12})
+        config={'recursion_limit': 20})
     if result.get('issues'):
         raise ValueError('本章经过一次返修仍未通过质量审核：' + '；'.join(result['issues'][:3]))
-    return {**result['draft'], 'agent_trace': result.get('events', [])}
+    return {**result['draft'], 'agent_trace': result.get('events', []), 'source_review': result.get('source_review', [])}

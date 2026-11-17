@@ -7,6 +7,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY safety_report ./safety_report
 COPY web ./web
 COPY reference ./reference
+COPY skills ./skills
+COPY third_party ./third_party
 RUN useradd --uid 10001 --create-home appuser && mkdir /app/data && chown appuser:appuser /app/data
 USER appuser
 EXPOSE 8765

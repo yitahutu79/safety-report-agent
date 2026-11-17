@@ -4,6 +4,7 @@ from pathlib import Path
 from .documents import parse_file, retrieve, HybridEvidenceIndex
 from . import provider
 from .provider import complete_json
+from .writing_style import writing_guidance, style_warnings
 
 FIELDS = [
     ("company", "建设单位", r"(?:建设单位|企业名称|公司名称)\s*[:：]\s*([^\n；;]{2,80})"),
@@ -417,7 +418,7 @@ def generate(profile, analysis, fields, use_llm, on_progress=lambda text: None,
         if use_llm and evidence:
             try:
                 from .agent_graph import run_chapter_graph
-                agent_system = SYSTEM.replace('安全设施设计报告的编辑人员', report_name + '的编辑人员') + skill_context + '\n证据中 corpus=approved_knowledge 的内容来自经审核知识库，只能支持一般法规/标准要求、定义、分析方法或措施原则；不得据此断言本项目具备某条件、采用某参数或已落实某设施。本项目事实只能引用 corpus=project_evidence 的当前项目资料或已确认字段。必须遵守知识条目的适用范围和版本/效期元数据；适用性不明时列入 review。'
+                agent_system = SYSTEM.replace('安全设施设计报告的编辑人员', report_name + '的编辑人员') + skill_context + '\n' + writing_guidance(report_type) + '\n证据中 corpus=approved_knowledge 的内容来自经审核知识库，只能支持一般法规/标准要求、定义、分析方法或措施原则；不得据此断言本项目具备某条件、采用某参数或已落实某设施。本项目事实只能引用 corpus=project_evidence 的当前项目资料或已确认字段。必须遵守知识条目的适用范围和版本/效期元数据；适用性不明时列入 review。'
                 if report_type != 'facility_design':
                     agent_system += '\n当前报告目录为未确认的试用结构，必须依据本报告类型和项目阶段组织内容，不得套用安全设施设计专篇的结论。现场核查、检测结果、整改完成情况和应急资源只能引用本项目证据；无法证实时明确列入缺项。'
                     agent_system += '\n本报告类型的编写边界：' + profile.get('guidance', '')
@@ -458,6 +459,9 @@ def generate(profile, analysis, fields, use_llm, on_progress=lambda text: None,
                 issues = readability_issues(result, evidence)
                 if issues:
                     raise ValueError('LangGraph 审核后仍发现质量问题：' + '；'.join(issues[:3]))
+                for warning in style_warnings(result):
+                    if warning not in result['review']:
+                        result['review'].append(warning)
                 result.pop('generation_error', None)
                 result.pop('needs_rewrite', None)
                 if not result['paragraphs'] and not result['tables']:

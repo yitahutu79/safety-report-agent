@@ -165,8 +165,13 @@ class EvidenceIndex:
             weight = 1 + math.log((len(self.chunks) + 1) / (len(matches) + 1))
             for index in matches:
                 scores[index] += weight
-        ranked = sorted(scores, key=scores.get, reverse=True)
-        return [self.chunks[index] for index in ranked[:limit]]
+        # GPT Researcher's BM25 ranks the existing keyword candidates locally.
+        # Keep the zero-overlap filter and corpus boundary; never fetch external data.
+        from .gptr_bm25 import bm25_scores
+        candidates = sorted(scores, key=scores.get, reverse=True)
+        lexical = bm25_scores(tokens(query), [tokens(self.chunks[i]['text']) for i in candidates])
+        ranked = sorted(range(len(candidates)), key=lambda i: (-lexical[i], i))
+        return [self.chunks[candidates[i]] for i in ranked[:limit]]
 
 
 class HybridEvidenceIndex(EvidenceIndex):

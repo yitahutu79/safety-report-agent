@@ -21,7 +21,7 @@ from urllib.parse import urlsplit, parse_qs, quote
 from .pipeline import analyze, generate, merge_fields, extract_model_fields, validate_ready, plan_missing_materials
 from .documents import retrieve, parse_file
 from .rag_workbench import search_project, retrieval_metrics
-from . import provider, settings, assets, versions
+from . import provider, settings, assets, versions, knowledge_qa
 from .knowledge import CATEGORIES, KnowledgeBase
 from .measures import MeasuresLedger
 from .calculations import (CalculationLedger, KINDS as CALCULATION_KINDS, calculate_major_hazard_indicator,
@@ -228,6 +228,41 @@ def preflight_job(target, chapter_ids, model, cancel_event):
         logging.exception('资料检查失败')
         message = str(exc) if isinstance(exc, ValueError) else '资料检查失败，请检查模型服务或查看日志'
         state_update(target, busy=False, cancel_requested=False, current_operation='', preflight_result=None,
+                     message=message, error=message)
+    finally:
+        with LOCK:
+            if JOB_CANCELLATIONS.get(str(target)) is cancel_event:
+                JOB_CANCELLATIONS.pop(str(target), None)
+
+
+def knowledge_qa_job(target, question, scope, model, cancel_event):
+    try:
+        if cancel_event.is_set():
+            raise provider.GenerationCancelled()
+        if scope == 'project':
+            chunks = load(target / 'analysis.json', {}).get('chunks', [])
+            evidence, mode, warning = search_project(chunks, target / 'knowledge' / 'qdrant', question, 8)
+        else:
+            store = knowledge_base()
+            evidence = store.search(question, 8)
+            mode, warning = store.index_mode, ''
+        if cancel_event.is_set():
+            raise provider.GenerationCancelled()
+        state_update(target, message='正在根据检索资料组织回答')
+        result = knowledge_qa.answer_question(question, evidence, model, cancel_event=cancel_event)
+        with project_lock(target.name):
+            if cancel_event.is_set():
+                raise provider.GenerationCancelled()
+            state_update(target, busy=False, cancel_requested=False, current_operation='',
+                qa_result={**result, 'question': question, 'scope': scope, 'retrieval_mode': mode, 'warning': warning},
+                message='知识问答完成，请核对引用资料', error='')
+    except provider.GenerationCancelled:
+        state_update(target, busy=False, cancel_requested=False, current_operation='', qa_result=None,
+                     message='已停止知识问答', error='')
+    except Exception as exc:
+        logging.exception('知识问答失败')
+        message = str(exc) if isinstance(exc, ValueError) else '知识问答失败，请检查模型连接或查看日志'
+        state_update(target, busy=False, cancel_requested=False, current_operation='', qa_result=None,
                      message=message, error=message)
     finally:
         with LOCK:
@@ -465,7 +500,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json(provider.test_model(config) if path.endswith('/test') else {'models': provider.list_models(config)})
             if path == '/api/knowledge/import':
                 import tempfile
-                from urllib.parse import parse_qs
                 params = parse_qs(parsed.query)
                 filename = Path(params.get('filename', [''])[0]).name
                 category = params.get('category', [''])[0]
@@ -514,7 +548,7 @@ class Handler(BaseHTTPRequestHandler):
                     'files': [], 'fields': [], 'warnings': [], 'updated_at': time.time(), 'chunk_count': 0})
                 save(target / 'state.json', state)
                 return self.json(state, 201)
-            match = re.fullmatch(r'/api/projects/([a-f0-9]{24})/(upload|analyze|facts|generate|preflight|materials-plan|cancel|flow|geocode|map|files|edit|restore|measures|calculations|professional|rag-test)', path)
+            match = re.fullmatch(r'/api/projects/([a-f0-9]{24})/(upload|analyze|facts|generate|preflight|materials-plan|cancel|flow|geocode|map|files|edit|restore|measures|calculations|professional|rag-test|knowledge-qa)', path)
             if not match:
                 return self.json({'error': '接口不存在'}, 404)
             target, action = directory(match[1]), match[2]
@@ -522,6 +556,21 @@ class Handler(BaseHTTPRequestHandler):
                 if action != 'cancel':
                     editable(target)
                 state = upgrade_state(load(target / 'state.json'))
+                if action == 'knowledge-qa':
+                    data = self.input_json()
+                    scope, question = data.get('scope'), data.get('question', '')
+                    if scope not in {'project', 'public'} or not isinstance(question, str) or not 1 <= len(question.strip()) <= 500:
+                        raise ValueError('请选择知识库并填写不超过 500 字的问题')
+                    if scope == 'project' and (state.get('analysis_dirty') or not load(target / 'analysis.json', {}).get('chunks')):
+                        raise ValueError('请先上传并读取当前项目资料')
+                    model = settings.resolve(DATA, data.get('model_id'))
+                    event = threading.Event()
+                    with LOCK:
+                        JOB_CANCELLATIONS[str(target)] = event
+                    state_update(target, busy=True, cancel_requested=False, current_operation='knowledge-qa',
+                                 qa_result=None, error='', message='正在检索知识资料')
+                    POOL.submit(knowledge_qa_job, target, question.strip(), scope, model, event)
+                    return self.json({'ok': True}, 202)
                 if action == 'rag-test':
                     data = self.input_json()
                     scope = data.get('scope')
@@ -710,7 +759,7 @@ class Handler(BaseHTTPRequestHandler):
                 if action == 'cancel':
                     with LOCK:
                         event = JOB_CANCELLATIONS.get(str(target))
-                    if not state.get('busy') or state.get('current_operation') not in {'generate', 'preflight'} or not event:
+                    if not state.get('busy') or state.get('current_operation') not in {'generate', 'preflight', 'knowledge-qa'} or not event:
                         raise ValueError('当前没有可停止的生成或资料检查任务')
                     state_update(target, cancel_requested=True, message='正在停止当前任务并结束模型请求；已有草稿保留')
                     provider.cancel_request(event)

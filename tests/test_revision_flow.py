@@ -33,6 +33,9 @@ class RevisionUnitTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
+        self.reviewer = patch('safety_report.agent_graph.ReviewerAgent.run', return_value={'review': []})
+        self.reviewer.start()
+        self.addCleanup(self.reviewer.stop)
 
     def tearDown(self):
         self.temp.cleanup()

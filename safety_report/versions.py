@@ -43,6 +43,7 @@ def audit(report):
         'structure_changes': report.get('structure_changes', []),
         'figure_warnings': report.get('figure_warnings', []), 'generation_errors': report.get('generation_errors', []),
         'readability_review': '已检查摘录标记、表格原文混排和段落与引用来源的相似度；仍需人工审阅表达逻辑与专业内容' if report.get('quality_checked') else '未通过智能正文可读性检查',
+        'source_review': [{'title': section['title'], 'items': section.get('source_review', [])} for section in report['sections'] if section.get('source_review')],
         'editorial_plan': [{'title': section['title'], 'source': section.get('editorial_plan_source', 'model'), 'items': section.get('editorial_plan', [])}
                            for section in report['sections'] if section.get('editorial_plan')],
         'quality_review': report.get('quality_review', {'overall': 'not_run', 'checks': [], 'counts': {'pass': 0, 'warning': 0, 'fail': 0}}),
@@ -72,6 +73,16 @@ def review_html(report):
         parts.append('<h2>' + escape(section['title']) + '</h2><ul>')
         parts.extend('<li>' + escape(s) + '</li>' for s in section['missing'] + section['review'])
         parts.append('</ul>')
+    if review.get('source_review'):
+        parts.append('<h2>模型资料筛选记录</h2><p>以下为资料用途建议，不能证明事实或规范现行有效。</p>')
+        labels = {'use': '可能相关', 'omit': '建议省略', 'verify': '待核对'}
+        for section in review['source_review']:
+            parts.append('<h3>' + escape(section['title']) + '</h3><ul>')
+            for item in section['items']:
+                source = evidence.get(item.get('id'), {})
+                title = (source.get('source', '') + ' ' + source.get('locator', '')).strip() or item.get('id', '')
+                parts.append('<li><b>' + escape(labels.get(item.get('decision'), '待核对') + ' · ' + title) + '</b>：' + escape(item.get('reason', '')) + '</li>')
+            parts.append('</ul>')
     if review['editorial_plan']:
         parts.append('<h2>资料筛选与编辑记录</h2><p>正文中的内容经过主题筛选和归并；以下记录列出主要取舍，完整证据出处见下方。若记录来自正文引用，它只表示证据使用情况，不代表模型说明了全部省略原因。</p>')
         labels = {'use': '采用并整理', 'omit': '省略', 'verify': '待核对'}

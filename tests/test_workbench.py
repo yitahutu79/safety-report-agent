@@ -97,7 +97,8 @@ class PipelineTests(unittest.TestCase):
         profile = {'headings': [{'text': '2 建设项目概况', 'level': 1}, {'text': '2.1 建设单位', 'level': 2}], 'sha256': 'template'}
         evidence = [{'id': 'e1', 'text': '建设单位：测试公司', 'source': 'input.txt', 'locator': 'paragraph[1]'}]
         response = {'paragraphs': [{'heading': '2.1 建设单位', 'text': '建设单位为测试公司。', 'evidence_ids': ['e1']}], 'tables': [], 'missing': [], 'review': []}
-        with patch('safety_report.pipeline.complete_json', return_value=response):
+        with patch('safety_report.pipeline.complete_json', return_value=response), \
+             patch('safety_report.agent_graph.ReviewerAgent.run', return_value={'review': []}):
             report = generate(profile, {'chunks': evidence}, [], True)
         self.assertEqual(report['sections'][0]['paragraphs'][0]['heading'], '2.1 建设单位')
         response['paragraphs'][0]['heading'] = '虚构章节'
