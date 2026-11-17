@@ -19,14 +19,19 @@ from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit, parse_qs, quote
 
 from .pipeline import analyze, generate, merge_fields, extract_model_fields, validate_ready, plan_missing_materials
-from .documents import retrieve
+from .documents import retrieve, parse_file
+from .rag_workbench import search_project, retrieval_metrics
 from . import provider, settings, assets, versions
 from .knowledge import CATEGORIES, KnowledgeBase
 from .measures import MeasuresLedger
-from .calculations import CalculationLedger, KINDS as CALCULATION_KINDS, calculate_major_hazard_indicator
+from .calculations import (CalculationLedger, KINDS as CALCULATION_KINDS, calculate_major_hazard_indicator,
+                           calculate_fire_water, calculate_pressure_relief, calculate_distance_margin)
+from .professional_workflow import ProfessionalLedger, WORKFLOWS
+from .workflow_schema import SCHEMAS
 from .quality import review_report
 from .visuals import draw_flow, geocode, static_map
 from .word import write_docx
+from .report_types import DEFAULT_TYPE, REPORT_TYPES, report_profile
 
 ROOT = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent.parent))
 DOWNLOADS = {'report.docx', 'report.json', 'review.json', 'review.html', 'flow.svg', 'flow.png', 'map.png', 'map.json'}
@@ -77,6 +82,7 @@ def state_update(target, **values):
 
 
 def upgrade_state(state):
+    state.setdefault('report_type', DEFAULT_TYPE)
     for file in state['files']:
         file.setdefault('id', hashlib.sha256(file['stored'].encode()).hexdigest()[:16])
         info = assets.classify(file['name'])
@@ -84,6 +90,7 @@ def upgrade_state(state):
             file.setdefault(key, value)
         file.setdefault('active', True)
         file.setdefault('document_type', 'other')
+        file.setdefault('document_source', '')
         file.setdefault('document_date', '')
         file.setdefault('document_version', '')
     state.setdefault('analysis_dirty', False)
@@ -112,6 +119,7 @@ def analyze_project(target, model=None):
     previous = load(target / 'analysis.json', {})
     labels = {f['stored']: f['name'] for f in state['files']}
     metadata = {f['stored']: {'document_type': f.get('document_type', 'other'),
+                              'document_source': f.get('document_source', ''),
                               'document_date': f.get('document_date', ''),
                               'document_version': f.get('document_version', '')} for f in state['files']}
     result = analyze([target / 'uploads' / f['stored'] for f in source_files], previous,
@@ -168,7 +176,63 @@ def export_report(target, report, output, files):
         figures.append({'path': str(target / 'map.png'), 'caption': '建设项目地理位置图',
                         'source': '高德地图 ' + metadata.get('captured_at', '')})
     report['figure_warnings'] = warnings
-    write_docx(report, load(PROFILE), output, figures)
+    state = upgrade_state(load(target / 'state.json'))
+    write_docx(report, report_profile(state['report_type'], load(PROFILE)), output, figures)
+
+
+def chapter_materials_plan(target, chapter_id, model, cancel_event=None):
+    report = versions.load_report(target)
+    section = next((item for item in (report or {}).get('sections', [])
+                    if (item.get('id') or (re.match(r'\d+', item.get('title', '')).group() if re.match(r'\d+', item.get('title', '')) else '')) == chapter_id), None)
+    if not section:
+        state = upgrade_state(load(target / 'state.json'))
+        profile = report_profile(state['report_type'], load(PROFILE))
+        heading = next((h for h in profile['headings'] if h['level'] == 1 and re.match(r'\d+', h['text']).group() == chapter_id), None)
+        if not heading:
+            raise ValueError('当前模板中没有找到所选章节')
+        section = {'title': heading['text'], 'subheadings': [h['text'] for h in profile['headings'] if re.match(rf'^{re.escape(chapter_id)}\.', h['text'])], 'missing': [], 'review': []}
+    chunks = load(target / 'analysis.json', {}).get('chunks', [])
+    used_ids = set()
+    for item in section.get('paragraphs', []) + section.get('tables', []) + section.get('editorial_plan', []):
+        used_ids.update(item.get('evidence_ids', []))
+    query = ' '.join([section['title']] + section.get('subheadings', []) +
+                     section.get('missing', [])[:12] + section.get('review', [])[:8])
+    selected = [item for item in chunks if item.get('id') in used_ids] + retrieve(chunks, query, limit=16)
+    state = upgrade_state(load(target / 'state.json'))
+    professional = ProfessionalLedger(target / 'professional.json', state['report_type']).report_evidence()
+    relevant = [item for item in professional if item.get('report_section') == chapter_id]
+    evidence = list({item['id']: item for item in relevant + selected}.values())[:16]
+    options = {'cancel_event': cancel_event}
+    if state['report_type'] != DEFAULT_TYPE:
+        options['report_name'] = REPORT_TYPES[state['report_type']]['name']
+    result = plan_missing_materials(section['title'], section, evidence, model, **options)
+    return {'chapter_id': chapter_id, 'chapter': section['title'], **result}
+
+
+def preflight_job(target, chapter_ids, model, cancel_event):
+    try:
+        plans = []
+        for index, chapter_id in enumerate(chapter_ids, 1):
+            if cancel_event.is_set():
+                raise provider.GenerationCancelled()
+            state_update(target, message=f'正在检查资料需求 {index}/{len(chapter_ids)}')
+            plans.append(chapter_materials_plan(target, chapter_id, model, cancel_event))
+        if cancel_event.is_set():
+            raise provider.GenerationCancelled()
+        state_update(target, busy=False, cancel_requested=False, current_operation='',
+                     preflight_result={'plans': plans}, message='资料检查完成', error='')
+    except provider.GenerationCancelled:
+        state_update(target, busy=False, cancel_requested=False, current_operation='', preflight_result=None,
+                     message='已停止资料检查，已有草稿保留', error='')
+    except Exception as exc:
+        logging.exception('资料检查失败')
+        message = str(exc) if isinstance(exc, ValueError) else '资料检查失败，请检查模型服务或查看日志'
+        state_update(target, busy=False, cancel_requested=False, current_operation='', preflight_result=None,
+                     message=message, error=message)
+    finally:
+        with LOCK:
+            if JOB_CANCELLATIONS.get(str(target)) is cancel_event:
+                JOB_CANCELLATIONS.pop(str(target), None)
 
 
 def job(target, operation, use_llm=False, model=None, chapter_ids=None, instructions='', cancel_event=None, supplement_answers='', supplement_chapter=''):
@@ -187,7 +251,8 @@ def job(target, operation, use_llm=False, model=None, chapter_ids=None, instruct
                 raise ValueError('请先读取资料')
             validate_ready(state['fields'])
             previous = versions.load_report(target)
-            report = generate(load(PROFILE), analysis, state['fields'], use_llm,
+            profile = report_profile(state['report_type'], load(PROFILE))
+            report = generate(profile, analysis, state['fields'], use_llm,
                 lambda text: state_update(target, message=text), model=model, previous=previous,
                 chapter_ids=chapter_ids, instructions=instructions,
                 on_section=lambda section: save(target / 'section.checkpoint.json', section),
@@ -195,14 +260,17 @@ def job(target, operation, use_llm=False, model=None, chapter_ids=None, instruct
                 supplement_answers=supplement_answers, supplement_chapter=supplement_chapter,
                 knowledge_retriever=knowledge_base().search,
                 measure_evidence=MeasuresLedger(target / 'measures.json').report_evidence(),
-                calculation_evidence=CalculationLedger(target / 'calculations.json').report_evidence())
+                calculation_evidence=CalculationLedger(target / 'calculations.json').report_evidence(),
+                professional_evidence=ProfessionalLedger(target / 'professional.json', state['report_type']).report_evidence())
             if cancel_event and cancel_event.is_set():
                 raise provider.GenerationCancelled()
             report['source_revision'] = state['data_revision']
-            report['attachments'] = [{k: f[k] for k in ('name', 'sha256', 'role', 'include', 'pages', 'caption', 'status')} for f in state['files'] if f.get('active', True)]
+            report['attachments'] = [{k: f.get(k, '') for k in ('name', 'sha256', 'role', 'include', 'pages', 'caption', 'status',
+                'document_type', 'document_source', 'document_date', 'document_version')} for f in state['files'] if f.get('active', True)]
             report['quality_review'] = review_report(report, state,
                 MeasuresLedger(target / 'measures.json').list(),
-                CalculationLedger(target / 'calculations.json').list())
+                CalculationLedger(target / 'calculations.json').list(),
+                ProfessionalLedger(target / 'professional.json', state['report_type']).list())
             with project_lock(state['id']):
                 if cancel_event and cancel_event.is_set():
                     raise provider.GenerationCancelled()
@@ -217,7 +285,8 @@ def job(target, operation, use_llm=False, model=None, chapter_ids=None, instruct
                     message += '；部分章节失败，保留了原内容，可单独重试'
                 if report.get('retrieval_mode') == 'chinese_keyword_fallback':
                     message += '；语义检索未启用，本次使用关键词检索'
-                still_outdated = state['source_changes_pending'] and chapter_ids is not None and set(chapter_ids) != {'1','2','3','4','5','6','7'}
+                expected = {re.match(r'\d+', h['text']).group() for h in profile['headings'] if h['level'] == 1}
+                still_outdated = state['source_changes_pending'] and chapter_ids is not None and set(chapter_ids) != expected
                 state_update(target, busy=False, cancel_requested=False, current_operation='', stage='done', report_outdated=still_outdated, source_changes_pending=still_outdated, report_version=meta['id'], message=message, error='')
     except provider.GenerationCancelled:
         state_update(target, busy=False, cancel_requested=False, current_operation='', message='已停止生成；未完成内容已丢弃，上一版草稿保留', error='')
@@ -279,7 +348,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             parsed = urlsplit(self.path)
             path, query = parsed.path, parse_qs(parsed.query)
-            static = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8'), '/brand-mark.svg': ('brand-mark.svg', 'image/svg+xml'), '/manifest.webmanifest': ('manifest.webmanifest', 'application/manifest+json')}
+            static = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8'), '/experience.css': ('experience.css', 'text/css; charset=utf-8'), '/brand-mark.svg': ('brand-mark.svg', 'image/svg+xml'), '/manifest.webmanifest': ('manifest.webmanifest', 'application/manifest+json')}
             if path in static:
                 name, mime = static[path]
                 return self.send_bytes(200, (ROOT / 'web' / name).read_bytes(), mime)
@@ -294,7 +363,11 @@ class Handler(BaseHTTPRequestHandler):
                     'image_ready': bool(importlib.util.find_spec('PIL')), 'pdf_render_ready': bool(importlib.util.find_spec('pypdfium2')),
                     'template': {key: load(PROFILE)[key] for key in ('table_count', 'image_resources')}, 'version': '0.9.0'})
             if path == '/api/template':
-                return self.json({'headings': load(PROFILE)['headings']})
+                profile = report_profile(query.get('report_type', [DEFAULT_TYPE])[0], load(PROFILE))
+                return self.json({key: profile[key] for key in ('headings', 'report_type', 'report_name', 'confirmed_structure')})
+            if path == '/api/report-types':
+                return self.json({'types': [{'id': ident, 'name': info['name'], 'confirmed_structure': info['confirmed_structure']}
+                                             for ident, info in REPORT_TYPES.items()]})
             if path == '/api/knowledge':
                 status = query.get('status', [''])[0]
                 category = query.get('category', [''])[0]
@@ -327,12 +400,16 @@ class Handler(BaseHTTPRequestHandler):
                         return self.json({'report': None})
                     public = {k: v for k, v in report.items() if k != 'evidence'}
                     return self.json({'report': public, 'version': load(target / 'state.json').get('report_version', '')})
+            if action == 'professional':
+                state = upgrade_state(load(target / 'state.json'))
+                return self.json({'items': ProfessionalLedger(target / 'professional.json', state['report_type']).list(),
+                                  'kinds': WORKFLOWS[state['report_type']], 'schemas': SCHEMAS[state['report_type']]})
             if action == 'measures':
                 return self.json({'items': MeasuresLedger(target / 'measures.json').list()})
             if action == 'calculations':
                 return self.json({'items': CalculationLedger(target / 'calculations.json').list(),
                                   'kinds': CALCULATION_KINDS,
-                                  'calculation_engine': 'none; records are manually entered and professionally reviewed'})
+                                  'calculation_engine': '预设重大危险源指标、单一火灾场景消防水量、厂房泄压面积；结果均需专业复核'})
             file_match = re.fullmatch(r'files/([a-f0-9]{16})/(download|preview)', action)
             if file_match:
                 state = upgrade_state(load(target / 'state.json'))
@@ -386,6 +463,32 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json({'ok': True, 'id': ident, **settings.public(DATA)})
                 config = settings.merge_input(DATA, data, require_model=path.endswith('/test'))
                 return self.json(provider.test_model(config) if path.endswith('/test') else {'models': provider.list_models(config)})
+            if path == '/api/knowledge/import':
+                import tempfile
+                from urllib.parse import parse_qs
+                params = parse_qs(parsed.query)
+                filename = Path(params.get('filename', [''])[0]).name
+                category = params.get('category', [''])[0]
+                if category not in CATEGORIES or Path(filename).suffix.lower() not in {'.docx', '.pdf', '.txt', '.md', '.csv'}:
+                    raise ValueError('请选择知识分类及 Word、PDF、TXT、Markdown 或 CSV 文件')
+                content = self.body(20_000_000)
+                if not content:
+                    raise ValueError('文件为空')
+                with tempfile.TemporaryDirectory(prefix='safety-public-import-') as temp:
+                    file_path = Path(temp) / filename
+                    file_path.write_bytes(content)
+                    parsed_doc = parse_file(file_path)
+                chunks = parsed_doc['chunks']
+                if not chunks:
+                    raise ValueError('文件未提取到文字；扫描件请先 OCR')
+                if len(chunks) > 100:
+                    raise ValueError('文件超过 100 个内容块，请分割后导入，避免导入不完整')
+                payloads = [{'category': category, 'title': filename + ' · ' + c['locator'] + ' · ' + str(c['offset']),
+                    'content': c['text'], 'source': filename + ' · ' + c['locator'], 'source_url': '',
+                    'applicability': '', 'version': '', 'effective_from': '', 'effective_to': '',
+                    'validity_status': 'unknown' if category == 'regulation' else 'not_applicable'} for c in chunks]
+                records = knowledge_base().create_many(payloads)
+                return self.json({'count': len(records), 'warnings': parsed_doc['warnings'], 'sha256': parsed_doc['sha256']}, 201)
             if path == '/api/knowledge':
                 return self.json({'record': knowledge_base().create(self.input_json())}, 201)
             knowledge_match = re.fullmatch(r'/api/knowledge/([a-f0-9]{32})/(update|status)', path)
@@ -401,14 +504,17 @@ class Handler(BaseHTTPRequestHandler):
                 name = str(data.get('name', '')).strip()
                 if not 1 <= len(name) <= 100:
                     raise ValueError('项目名称须为 1 到 100 字')
+                report_type = data.get('report_type', DEFAULT_TYPE)
+                if not isinstance(report_type, str) or report_type not in REPORT_TYPES:
+                    raise ValueError('请选择有效的报告类型')
                 pid = secrets.token_hex(12)
                 target = DATA / pid
                 (target / 'uploads').mkdir(parents=True)
-                state = upgrade_state({'id': pid, 'name': name, 'stage': 'upload', 'busy': False, 'message': '请上传项目资料',
+                state = upgrade_state({'id': pid, 'name': name, 'report_type': report_type, 'stage': 'upload', 'busy': False, 'message': '请上传项目资料',
                     'files': [], 'fields': [], 'warnings': [], 'updated_at': time.time(), 'chunk_count': 0})
                 save(target / 'state.json', state)
                 return self.json(state, 201)
-            match = re.fullmatch(r'/api/projects/([a-f0-9]{24})/(upload|analyze|facts|generate|materials-plan|cancel|flow|geocode|map|files|edit|restore|measures|calculations)', path)
+            match = re.fullmatch(r'/api/projects/([a-f0-9]{24})/(upload|analyze|facts|generate|preflight|materials-plan|cancel|flow|geocode|map|files|edit|restore|measures|calculations|professional|rag-test)', path)
             if not match:
                 return self.json({'error': '接口不存在'}, 404)
             target, action = directory(match[1]), match[2]
@@ -416,6 +522,48 @@ class Handler(BaseHTTPRequestHandler):
                 if action != 'cancel':
                     editable(target)
                 state = upgrade_state(load(target / 'state.json'))
+                if action == 'rag-test':
+                    data = self.input_json()
+                    scope = data.get('scope')
+                    query_text = data.get('query', '')
+                    limit = data.get('limit', 5)
+                    if scope not in {'project', 'public'} or not isinstance(query_text, str) or not 1 <= len(query_text.strip()) <= 500:
+                        raise ValueError('请选择检索范围并填写不超过 500 字的问题')
+                    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
+                        raise ValueError('返回数量须为 1 至 20')
+                    if scope == 'project':
+                        if state.get('analysis_dirty'):
+                            raise ValueError('项目资料已变化，请先读取新增资料')
+                        chunks = load(target / 'analysis.json', {}).get('chunks', [])
+                        if not chunks:
+                            raise ValueError('请先上传并读取当前项目资料')
+                        results, mode, warning = search_project(chunks, target / 'knowledge' / 'qdrant', query_text.strip(), limit)
+                    else:
+                        store = knowledge_base()
+                        chunks = store._approved_chunks()
+                        results = store.search(query_text.strip(), limit)
+                        mode, warning = store.index_mode, ''
+                    response = {'scope': scope, 'results': results, 'retrieval_mode': mode, 'warning': warning}
+                    if data.get('operation') == 'evaluate':
+                        labels = data.get('relevant_ids')
+                        known = {item['id'] for item in chunks}
+                        if isinstance(labels, list) and any(label not in known for label in labels):
+                            raise ValueError('标注 ID 不属于当前检索范围或已失效，请重新标注')
+                        response['metrics'] = retrieval_metrics(results, labels, limit)
+                    elif data.get('operation', 'search') != 'search':
+                        raise ValueError('检索操作无效')
+                    return self.json(response)
+                if action == 'professional':
+                    data = self.input_json()
+                    ident = data.pop('id', '')
+                    section = str(data.get('report_section', '')).strip() or WORKFLOWS[state['report_type']].get(data.get('kind'), ('', ''))[1]
+                    allowed = {re.match(r'\d+', h['text']).group() for h in report_profile(state['report_type'], load(PROFILE))['headings'] if h['level'] == 1}
+                    if section not in allowed:
+                        raise ValueError('报告主章节编号不在当前模板中')
+                    item = ProfessionalLedger(target / 'professional.json', state['report_type']).save(data, ident or None)
+                    state_update(target, data_revision=state['data_revision'] + 1, source_changes_pending=True,
+                                 report_outdated=state['report_outdated'] or bool(state.get('report_version')), message='专业记录已保存；请更新受影响章节')
+                    return self.json({'item': item})
                 if action == 'measures':
                     data = self.input_json()
                     ledger = MeasuresLedger(target / 'measures.json')
@@ -450,14 +598,45 @@ class Handler(BaseHTTPRequestHandler):
                     data = self.input_json()
                     analysis = load(target / 'analysis.json', {})
                     ledger = CalculationLedger(target / 'calculations.json')
+                    if data.get('operation') == 'compare_distance':
+                        name = str(data.get('name', '')).strip()
+                        if not name or len(name) > 100:
+                            raise ValueError('请填写不超过 100 字的距离比较对象')
+                        result = calculate_distance_margin(data.get('actual'), data.get('reference'))
+                        reference = result['inputs'][1]
+                        record = ledger.save({'kind': 'fire_separation', 'title': '距离差值 - ' + name,
+                            'status': 'draft', 'inputs': result['inputs'], 'source_rule': reference['source_file'],
+                            'rule_version': '', 'rule_clause': reference['source_locator'],
+                            'rule_validity_status': 'unknown', 'rule_checked_date': '', 'formula': result['formula'],
+                            'steps': result['steps'], 'result': result['result'], 'result_unit': result['result_unit'],
+                            'assumptions': result['assumptions'], 'reviewer': '', 'review_note': '', 'report_section': ''})
+                        return self.json({'item': record, 'calculation': result})
+                    if data.get('operation') in {'calculate_fire_water', 'calculate_pressure_relief'}:
+                        water = data['operation'] == 'calculate_fire_water'
+                        name = str(data.get('name', '')).strip()
+                        if not name or len(name) > 100:
+                            raise ValueError('请填写不超过 100 字的建筑或计算段名称')
+                        result = calculate_fire_water(data.get('systems')) if water else calculate_pressure_relief(data.get('volume'), data.get('coefficient'))
+                        source = ('GB 50974-2014《消防给水及消火栓系统技术规范》 https://js.119.gov.cn/group1/M00/00/2B/ZYS-ZGGB9XCAAdbNAA3fvxwUOIs217.pdf' if water else
+                                  'GB 50016-2014（2018年版）《建筑设计防火规范》，须核验适用性及现行状态')
+                        record = ledger.save({'kind': 'fire_water' if water else 'pressure_relief_area',
+                            'title': ('消防用水量 - ' if water else '厂房泄压面积 - ') + name,
+                            'status': 'draft', 'inputs': result['inputs'], 'source_rule': source,
+                            'rule_version': '2014' if water else '2014（2018年版）',
+                            'rule_clause': '3.6.1' if water else '3.6.4',
+                            'rule_validity_status': 'unknown', 'rule_checked_date': '',
+                            'formula': result['formula'], 'steps': result['steps'], 'result': result['result'],
+                            'result_unit': result['result_unit'], 'assumptions': result['assumptions'],
+                            'reviewer': '', 'review_note': '', 'report_section': '5 安全设施设计'})
+                        return self.json({'item': record, 'calculation': result})
                     if data.get('operation') == 'calculate_major_hazard':
                         result = calculate_major_hazard_indicator(data.get('unit_name'), data.get('unit_source_file'),
                             data.get('unit_source_locator'), data.get('materials'))
                         record = ledger.save({'kind': 'major_hazard', 'title': '重大危险源辨识 - ' + result['unit_name'],
                             'status': 'draft', 'inputs': result['inputs'],
-                            'source_rule': result['rule'] + '（现行状态核验日期 2026-11-03；状态见国家标准信息公共服务平台） https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=E976F49B263D7579CCABD419B1E40225',
+                            'source_rule': result['rule'] + ' https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=E976F49B263D7579CCABD419B1E40225',
                             'rule_version': result['rule_version'], 'rule_clause': result['rule_clause'],
-                            'rule_validity_status': 'current', 'rule_checked_date': date.today().isoformat(),
+                            'rule_validity_status': 'unknown', 'rule_checked_date': '',
                             'formula': result['formula'], 'steps': result['steps'], 'result': result['indicator'],
                             'result_unit': result['result_unit'], 'assumptions': result['assumptions'], 'reviewer': '',
                             'review_note': '', 'report_section': '3 危险有害因素分析'})
@@ -478,29 +657,28 @@ class Handler(BaseHTTPRequestHandler):
                     if not isinstance(chapter_id, str) or not chapter_id:
                         raise ValueError('请选择有效章节')
                     model = settings.resolve(DATA, data.get('model_id'))
+                    return self.json(chapter_materials_plan(target, chapter_id, model))
+                if action == 'preflight':
+                    data = self.input_json()
+                    chapters = data.get('chapter_ids')
                     report = versions.load_report(target)
-                    section = next((item for item in (report or {}).get('sections', [])
-                                    if (item.get('id') or (re.match(r'\d+', item.get('title', '')).group() if re.match(r'\d+', item.get('title', '')) else '')) == chapter_id), None)
-                    if not section:
-                        profile = load(PROFILE)
-                        heading = next((h for h in profile['headings'] if h['level'] == 1 and re.match(r'\d+', h['text']).group() == chapter_id), None)
-                        if not heading:
-                            raise ValueError('当前模板中没有找到所选章节')
-                        section = {'title': heading['text'], 'subheadings': [h['text'] for h in profile['headings'] if re.match(rf'^{chapter_id}\.', h['text'])], 'missing': [], 'review': []}
-                    analysis = load(target / 'analysis.json', {})
-                    chunks = analysis.get('chunks', [])
-                    used_ids = set()
-                    for item in section.get('paragraphs', []) + section.get('tables', []):
-                        used_ids.update(item.get('evidence_ids', []))
-                    for item in section.get('editorial_plan', []):
-                        used_ids.update(item.get('evidence_ids', []))
-                    query = ' '.join([section['title']] + section.get('subheadings', []) +
-                                     section.get('missing', [])[:12] + section.get('review', [])[:8])
-                    selected = [item for item in chunks if item.get('id') in used_ids]
-                    selected += retrieve(chunks, query, limit=16)
-                    evidence = list({item['id']: item for item in selected}.values())[:16]
-                    result = plan_missing_materials(section['title'], section, evidence, model)
-                    return self.json({'chapter': section['title'], **result})
+                    allowed = {item.get('id') or (re.match(r'\d+', item.get('title', '')).group() if re.match(r'\d+', item.get('title', '')) else '')
+                               for item in report.get('sections', [])} if report else {
+                                   re.match(r'\d+', h['text']).group() for h in report_profile(state['report_type'], load(PROFILE))['headings'] if h['level'] == 1}
+                    if not isinstance(chapters, list) or not chapters or len(chapters) > 20 or any(not isinstance(c, str) or c not in allowed for c in chapters) or len(set(chapters)) != len(chapters):
+                        raise ValueError('请选择有效的章节')
+                    if state.get('analysis_dirty'):
+                        raise ValueError('资料已变更，请先读取新增资料，再检查章节需求')
+                    if not (target / 'analysis.json').exists():
+                        raise ValueError('请先读取资料')
+                    model = settings.resolve(DATA, data.get('model_id'))
+                    event = threading.Event()
+                    with LOCK:
+                        JOB_CANCELLATIONS[str(target)] = event
+                    state_update(target, busy=True, cancel_requested=False, current_operation='preflight',
+                                 preflight_result=None, error='', message='正在准备资料检查')
+                    POOL.submit(preflight_job, target, chapters, model, event)
+                    return self.json({'ok': True}, 202)
                 if action == 'upload':
                     query = parse_qs(parsed.query)
                     filename = query.get('name', [''])[0].replace('\\', '/').rsplit('/', 1)[-1]
@@ -522,7 +700,7 @@ class Handler(BaseHTTPRequestHandler):
                     stored = ident + '_' + filename
                     (target / 'uploads' / stored).write_bytes(data)
                     state['files'].append({'id': ident, 'name': filename, 'stored': stored, 'size': len(data), 'sha256': digest, 'active': True,
-                        'document_type': 'other', 'document_date': '', 'document_version': '', **info})
+                        'document_type': 'other', 'document_source': '', 'document_date': '', 'document_version': '', **info})
                     state_update(target, files=state['files'], analysis_dirty=state['analysis_dirty'] or info['role'] == 'source',
                         report_outdated=(target / 'report.json').exists() or (target / 'report.docx').exists(),
                         source_changes_pending=state['source_changes_pending'] or info['role'] == 'source',
@@ -532,9 +710,9 @@ class Handler(BaseHTTPRequestHandler):
                 if action == 'cancel':
                     with LOCK:
                         event = JOB_CANCELLATIONS.get(str(target))
-                    if not state.get('busy') or state.get('current_operation') != 'generate' or not event:
-                        raise ValueError('当前没有可停止的生成任务')
-                    state_update(target, cancel_requested=True, message='正在停止生成并结束模型请求；已完成草稿继续保留')
+                    if not state.get('busy') or state.get('current_operation') not in {'generate', 'preflight'} or not event:
+                        raise ValueError('当前没有可停止的生成或资料检查任务')
+                    state_update(target, cancel_requested=True, message='正在停止当前任务并结束模型请求；已有草稿保留')
                     provider.cancel_request(event)
                     return self.json({'ok': True, 'message': '已发送停止请求'})
                 if action == 'files':
@@ -561,6 +739,10 @@ class Handler(BaseHTTPRequestHandler):
                         if data['document_type'] not in {'project_filing','company_certificate','process','materials','drawing','safety_analysis','historical_design','expert_review','other'}:
                             raise ValueError('资料类型无效')
                         file['document_type'] = data['document_type']; metadata_changed = True
+                    if 'document_source' in data:
+                        value = str(data['document_source']).strip()
+                        if len(value) > 300: raise ValueError('资料来源最多 300 字')
+                        file['document_source'] = value; metadata_changed = True
                     if 'document_date' in data:
                         value = str(data['document_date']).strip()
                         try:
@@ -583,7 +765,7 @@ class Handler(BaseHTTPRequestHandler):
                     model = settings.resolve(DATA, data.get('model_id')) if use_llm or data.get('ai_extract') else None
                     chapters = data.get('chapter_ids')
                     existing_report = versions.load_report(target)
-                    allowed_chapters = {re.match(r'\d+', h['text']).group() for h in load(PROFILE)['headings'] if h['level'] == 1}
+                    allowed_chapters = {re.match(r'\d+', h['text']).group() for h in report_profile(state['report_type'], load(PROFILE))['headings'] if h['level'] == 1}
                     if existing_report:
                         allowed_chapters = {item.get('id') or (re.match(r'\d+', item.get('title', '')).group() if re.match(r'\d+', item.get('title', '')) else '')
                                              for item in existing_report.get('sections', [])}
@@ -634,7 +816,8 @@ class Handler(BaseHTTPRequestHandler):
                         data.get('add_chapter'), data.get('delete_chapter_ids')) if action == 'edit' else versions.load_report(target, data.get('version', ''))
                     report['quality_review'] = review_report(report, state,
                         MeasuresLedger(target / 'measures.json').list(),
-                        CalculationLedger(target / 'calculations.json').list())
+                        CalculationLedger(target / 'calculations.json').list(),
+                ProfessionalLedger(target / 'professional.json', state['report_type']).list())
                     versions.preserve_legacy(target)
                     if action == 'restore':
                         import shutil

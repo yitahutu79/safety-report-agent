@@ -55,11 +55,14 @@ def write_docx(report, profile, path, figures=()):
     project = next((f['value'] for f in fields if f['label'] == '项目名称'), '建设项目')
     company = next((f['value'] for f in fields if f['label'] == '建设单位'), '')
     outline = report.get('mode') in {'outline', 'evidence_outline'}
-    title = project + ('报告编写提纲' if outline else '安全设施设计报告')
+    report_name = report.get('report_name', profile.get('report_name', '安全设施设计报告'))
+    title = project + report_name + ('编写提纲' if outline else '')
     parts = [paragraph(title, 'Title')]
     if company:
         parts.append(paragraph(company, 'Subtitle'))
     parts.append(paragraph('编写提纲' if outline else '编制草稿', 'Subtitle'))
+    if not report.get('structure_confirmed', True):
+        parts.append(paragraph('本报告采用待双方确认的试用章节结构，须由专业人员核对目录、内容及适用要求。', 'Subtitle'))
     parts.append(paragraph('目录', 'TOCHeading'))
     parts.append('<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \\o "1-3" \\h \\z \\u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>请在 Word 中更新目录</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>')
     for section in report['sections']:

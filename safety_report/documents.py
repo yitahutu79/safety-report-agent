@@ -99,7 +99,12 @@ def parse_file(path):
             raise ValueError("PDF 解析依赖未安装；请使用 Docker 版本或安装 requirements.txt") from exc
         blocks = []
         for i, page in enumerate(PdfReader(path).pages, 1):
-            text = page.extract_text() or ""
+            try:
+                text = page.extract_text() or ""
+            except Exception as exc:
+                # A broken or overly complex page must not discard readable pages.
+                warnings.append(f"第 {i} 页文本提取失败（{type(exc).__name__}），请检查原图或使用 OCR")
+                continue
             if len(text.strip()) < 30:
                 warnings.append(f"第 {i} 页缺少文本层，需要 OCR 或图纸人工核对")
             if text.strip():

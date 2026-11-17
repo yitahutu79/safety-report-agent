@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 from http.server import ThreadingHTTPServer
 
-from safety_report import assets, pipeline, provider, server, settings, versions
+from safety_report import assets, calculations, pipeline, provider, server, settings, versions
 from safety_report.word import write_docx
 from safety_report.documents import parse_file
 
@@ -36,6 +36,26 @@ class RevisionUnitTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def test_fire_water_and_relief_calculations_require_sources_and_preserve_inputs(self):
+        def sourced(value):
+            return {'value': value, 'source_file': '设计依据.pdf', 'source_locator': '第 3 页'}
+        water = calculations.calculate_fire_water([
+            {'name': '室内消火栓', 'flow': sourced('20'), 'duration': sourced('2')},
+            {'name': '自动喷水', 'flow': sourced('10'), 'duration': sourced('1')},
+        ])
+        self.assertEqual(water['result'], '180.000')
+        self.assertEqual(len(water['inputs']), 4)
+        self.assertIn('同一建筑', water['assumptions'])
+        relief = calculations.calculate_pressure_relief(sourced('1000'), sourced('0.11'))
+        self.assertEqual(relief['result'], '110.000')
+        self.assertEqual(relief['inputs'][1]['source_locator'], '第 3 页')
+        for invalid in ('0', '-1', 'NaN', 'Infinity'):
+            with self.assertRaises(ValueError):
+                calculations.calculate_pressure_relief(sourced(invalid), sourced('0.11'))
+        with self.assertRaises(ValueError):
+            calculations.calculate_fire_water([{'name': '室内', 'flow': sourced('20'),
+                                               'duration': {'value':'2'}}])
 
     def test_additional_sources_keep_manual_fields_and_flag_conflicts(self):
         old = [{'key': 'company', 'value': '人工填写公司', 'confirmed': True, 'manual': True, 'candidates': []}]
@@ -273,6 +293,30 @@ class RevisionUnitTests(unittest.TestCase):
         self.assertTrue(any(e['id'] == 'measure-m1-r1' for e in result['evidence']))
         self.assertTrue(any(e.get('evidence_type') == 'measure_adoption' for e in complete.call_args.args[1]['evidence']))
 
+    def test_agent_followup_query_can_add_approved_knowledge_to_report_snapshot(self):
+        profile={'sha256':'template','headings':[{'text':'1 设计依据','level':1}]}
+        fact={'id':'e1','text':'项目取得备案文件 A-1。','source':'备案.txt','locator':'第1段','offset':0}
+        rule={'id':'kb-rule-extra','text':'经审核的通用设计要求。','source':'知识库：编制规则',
+              'locator':'审核版本 v1','corpus':'approved_knowledge'}
+        class FakeIndex:
+            client=None;semantic_error=None
+            def __init__(self, chunks, path=None): self.chunks=chunks
+            def search(self, query, limit=10): return self.chunks[:limit]
+            def close(self): pass
+        def knowledge(query, limit=5):
+            return [rule] if query=='精准条款' else []
+        def complete(system, payload, model, **kwargs):
+            if '资料规划 Agent' in system:
+                return {'queries':['精准条款']}
+            return {'paragraphs':[{'heading':'1 设计依据','text':'设计文件结合备案信息和经审核的通用编制要求组织。',
+                                   'evidence_ids':['e1','kb-rule-extra']}],
+                    'tables':[],'missing':[],'review':[]}
+        with patch('safety_report.pipeline.HybridEvidenceIndex',FakeIndex), \
+             patch('safety_report.pipeline.complete_json',side_effect=complete):
+            result=pipeline.generate(profile,{'chunks':[fact]},[],True,model={'name':'测试'},
+                                     chapter_ids=['1'],knowledge_retriever=knowledge)
+        self.assertIn('kb-rule-extra',{item['id'] for item in result['evidence']})
+
     def test_professionally_reviewed_calculation_is_traceable_chapter_evidence(self):
         profile = {'sha256': 'template', 'headings': [{'text': '3 危险分析', 'level': 1}]}
         project_fact = {'id': 'project-fact', 'text': '消防设计说明给出设计流量。', 'source': '消防设计说明.docx',
@@ -349,6 +393,19 @@ class RevisionHTTPTests(unittest.TestCase):
         project=self.request('/api/projects',{'name':'修订测试'})
         return project['id'],'/api/projects/'+project['id']
 
+    def test_report_type_is_bound_to_project_and_preflight_uses_correct_structure(self):
+        project=self.request('/api/projects',{'name':'预案项目','report_type':'emergency_plan'})
+        route='/api/projects/'+project['id']
+        self.assertEqual(self.request(route)['report_type'],'emergency_plan')
+        template=self.request('/api/template?report_type=emergency_plan')
+        self.assertEqual(template['headings'][0]['text'],'1 总则')
+        advice={'requests':[],'can_draft_now':True,'note':'测试'}
+        with patch('safety_report.server.settings.resolve',return_value={'model':'mock'}), \
+             patch('safety_report.server.plan_missing_materials',return_value=advice) as planner:
+            result=self.request(route+'/materials-plan',{'chapter_id':'1','model_id':'mock'})
+        self.assertEqual(result['chapter'],'1 总则')
+        self.assertEqual(planner.call_args.kwargs['report_name'],'生产安全事故应急预案')
+
     def test_global_knowledge_records_are_separate_from_project_data(self):
         before=self.request('/api/knowledge')
         record=self.request('/api/knowledge',{'category':'report_rule','title':'报告核对规则',
@@ -396,9 +453,24 @@ class RevisionHTTPTests(unittest.TestCase):
                 'critical_source_file':'GB 18218-2018','critical_source_locator':'表 1，经专业人员核验'}]})
         self.assertEqual(result['calculation']['indicator'],'0.5')
         self.assertEqual(result['item']['status'],'draft')
+        self.assertEqual(result['item']['rule_validity_status'],'unknown')
+        self.assertEqual(result['item']['rule_checked_date'],'')
         self.assertEqual(result['item']['inputs'][0]['source_file'],'总图.pdf')
         ledger=server.CalculationLedger(server.directory(pid)/'calculations.json')
         self.assertEqual(ledger.report_evidence(),[])
+
+    def test_fire_and_relief_calculations_are_saved_as_unverified_drafts(self):
+        pid, route = self.project()
+        value=lambda x: {'value': x, 'source_file':'设计文件.pdf', 'source_locator':'第 2 页'}
+        water=self.request(route+'/calculations',{'operation':'calculate_fire_water','name':'车间火灾场景',
+            'systems':[{'name':'室内消火栓','flow':value('20'),'duration':value('2')}]})
+        relief=self.request(route+'/calculations',{'operation':'calculate_pressure_relief','name':'车间计算段',
+            'volume':value('1000'),'coefficient':value('0.11')})
+        self.assertEqual(water['calculation']['result'],'144.000')
+        self.assertEqual(relief['calculation']['result'],'110.000')
+        self.assertEqual(relief['item']['rule_validity_status'],'unknown')
+        self.assertEqual(relief['item']['status'],'draft')
+        self.assertEqual(server.CalculationLedger(server.directory(pid)/'calculations.json').report_evidence(),[])
 
     def test_project_files_can_keep_type_date_and_revision_metadata(self):
         pid,route=self.project()
@@ -406,10 +478,11 @@ class RevisionHTTPTests(unittest.TestCase):
         self.request(route+'/upload?name='+quote('综合分析报告.txt'),raw='安全建议：设置报警器。'.encode())
         state=self.request(route)
         file=state['files'][0]
-        self.request(route+'/files',{'id':file['id'],'document_type':'safety_analysis',
+        self.request(route+'/files',{'id':file['id'],'document_type':'safety_analysis','document_source':'建设单位提供',
             'document_date':'2025-03-01','document_version':'送审稿 v2'})
         updated=self.request(route)['files'][0]
         self.assertEqual(updated['document_type'],'safety_analysis')
+        self.assertEqual(updated['document_source'],'建设单位提供')
         self.assertEqual(updated['document_date'],'2025-03-01')
         self.assertEqual(updated['document_version'],'送审稿 v2')
 
@@ -428,6 +501,30 @@ class RevisionHTTPTests(unittest.TestCase):
             result=self.request(route+'/materials-plan',{'chapter_id':'1','model_id':'mock-id'})
         self.assertEqual(result['note'],advice['note'])
         self.assertEqual(server.load(target/'state.json')['report_version'],before)
+
+    def test_preflight_can_be_cancelled_without_creating_a_report(self):
+        pid, route = self.project()
+        self.request(route+'/upload?name=project.txt',raw='项目名称：测试项目\n建设单位：测试公司'.encode())
+        target=server.directory(pid);server.job(target,'analyze')
+        started=threading.Event()
+        def wait_for_cancel(chapter, section, evidence, model, cancel_event=None):
+            started.set()
+            if not cancel_event.wait(5):
+                raise AssertionError('取消信号未到达')
+            raise provider.GenerationCancelled()
+        with patch('safety_report.server.settings.resolve',return_value={'model':'mock'}), \
+             patch('safety_report.server.plan_missing_materials',side_effect=wait_for_cancel):
+            self.request(route+'/preflight',{'chapter_ids':['1'],'model_id':'mock-id'})
+            self.assertTrue(started.wait(5))
+            self.assertEqual(self.request(route)['current_operation'],'preflight')
+            self.request(route+'/cancel',{})
+            for _ in range(100):
+                state=self.request(route)
+                if not state['busy']: break
+                threading.Event().wait(.02)
+        self.assertFalse(state['busy'])
+        self.assertIsNone(state['preflight_result'])
+        self.assertFalse((target/'report.docx').exists())
 
     def test_temp_file_does_not_abort_import_and_deduplication(self):
         pid,route=self.project()

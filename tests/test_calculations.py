@@ -93,12 +93,21 @@ class CalculationLedgerTests(unittest.TestCase):
         checks={item['key']:item for item in review_report(report,state)['checks']}
         self.assertEqual(checks['regulation_validity']['status'],'warning')
         self.assertEqual(checks['cross_chapter_consistency']['status'],'warning')
-        current={'id':'law','source':'知识库：GB18218','locator':'审核版本 v1',
+        current={'id':'law','source':'知识库：GB 18218-2018','locator':'审核版本 v1',
             'corpus':'approved_knowledge','category':'regulation','validity_status':'current'}
         report['sections'][0]['paragraphs'][0]['evidence_ids'].append('law')
         report['evidence'].append(current)
         checks={item['key']:item for item in review_report(report,state)['checks']}
         self.assertEqual(checks['regulation_validity']['status'],'pass')
+        current['source']='知识库：GB 50016-2014'
+        checks={item['key']:item for item in review_report(report,state)['checks']}
+        self.assertEqual(checks['regulation_validity']['status'],'warning')
+
+    def test_empty_measures_is_flagged_when_analysis_report_exists(self):
+        report={'sections':[],'evidence':[],'unconfirmed_fields':[]}
+        state={'fields':[],'files':[{'name':'综合分析报告.docx','document_type':'safety_analysis','active':True}]}
+        checks={item['key']:item for item in review_report(report,state)['checks']}
+        self.assertEqual(checks['measure_adoption']['status'],'warning')
 
 
 if __name__ == '__main__':

@@ -1,0 +1,27 @@
+/* Workspace refinements: readable density, clear actions and responsive navigation. */
+:root{--ink:#203731;--muted:#61756c;--line:#dbe5df;--green:#17664f;--bg:#f2f6f3}
+body{font-size:15px;line-height:1.65}
+aside{background:linear-gradient(165deg,#102e29,#193e34 65%,#17342c);box-shadow:8px 0 28px #183c2910}
+.brand{letter-spacing:.02em}.brand-icon-image{filter:drop-shadow(0 3px 8px #0002)}
+.settings-button,.new-project{border-radius:9px}.aside-label{letter-spacing:.12em}
+main{max-width:1530px;padding-left:clamp(24px,4vw,60px);padding-right:clamp(24px,4vw,60px)}
+header{height:72px}.breadcrumb,.tag{font-size:12px}.header-tags .tag{padding:6px 10px}
+.intro{margin:34px 0 26px}.intro h1{font-size:clamp(24px,2.2vw,32px);letter-spacing:-.03em}.intro p{font-size:14px;color:#647970}
+.workflow-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:0 0 24px}
+.workflow-step{display:flex;text-align:left;align-items:center;gap:13px;min-width:0;padding:16px 17px;border:1px solid var(--line);border-radius:12px;background:#fff;color:var(--ink);box-shadow:0 4px 14px #1d403609}
+.workflow-step:hover:not(:disabled){border-color:#8ab6a3;transform:translateY(-1px)}
+.workflow-step .step-index{display:grid;place-items:center;flex:0 0 34px;height:34px;border-radius:10px;background:#e8f3ec;color:#17664f;font-size:13px}
+.workflow-step strong,.workflow-step small{display:block;overflow-wrap:anywhere}.workflow-step strong{font-size:13px}.workflow-step small{color:#687c72;font-size:12px;font-weight:400;line-height:1.4;margin-top:2px}
+.workspace-tabs{gap:4px;overflow-x:auto;white-space:nowrap;margin-bottom:22px}.workspace-tabs button{font-size:13px;padding:12px 16px;color:#64786e}.workspace-tabs button.active{font-weight:700}
+.card{border-radius:14px;padding:28px;border-color:#dfe8e1;box-shadow:0 5px 24px #2846380a}.card h2{font-size:18px}.card-heading{margin-bottom:18px}.section-description{font-size:13px;color:#657970;line-height:1.8}
+.muted{font-size:12px;color:#667d70}.section-number{font-size:12px}.primary,.secondary{font-size:13px;border-radius:8px;padding:10px 15px}.primary{box-shadow:0 3px 8px #17664f1f}.secondary{border-color:#d3dfd7}
+input[type=text],input[type=password],input:not([type]),textarea,select{font-size:14px;border-color:#ccd9d0;border-radius:8px;padding:10px 12px}input:focus-visible,textarea:focus-visible,select:focus-visible,button:focus-visible,a:focus-visible{outline:3px solid #61a986;outline-offset:2px}
+.dropzone{border-radius:11px;padding:30px 16px;background:#f8fbf8}.dropzone strong{font-size:14px}.dropzone>span:not(.upload-icon),.dropzone small{font-size:12px;color:#6c8073}
+.fact{grid-template-columns:minmax(90px,130px) minmax(0,1fr) auto}.fact>label,.fact .confirmation{font-size:13px}.fact small,.section-description,.file-row strong,.file-row small{font-size:12px}
+.progress{position:sticky;top:8px;z-index:10;box-shadow:0 8px 25px #1a3e2b12}.progress #progress-text{flex:1}.progress button{white-space:nowrap}
+dialog{box-shadow:0 24px 70px #10261c35;max-height:90vh;overflow:auto}dialog::backdrop{background:#102e29a8}.dialog-actions{flex-wrap:wrap}
+.evidence-item p,.evidence-item strong,.asset-card small,.asset-card label,.history-row p,.history-actions a,.history-actions button{font-size:12px}
+.toast{font-size:13px;line-height:1.5}
+.calculator{background:#f8fbf8;border:1px solid #dce8df;border-radius:10px;padding:15px;margin:14px 0}.calculator summary{font-size:14px;font-weight:650;color:#21563f}.calculator>label,.calculator-system>label,.calculator-source label{display:block;font-size:12px;color:#4e6659}.calculator input{margin:5px 0 10px}.calculator-source{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.calculator-system{padding:14px;margin:12px 0;border:1px solid #e1ebe3;border-radius:8px;background:white}.calculator>button{margin:8px 10px 4px 0}.calculator-result{margin-top:14px}
+@media(max-width:900px){.workflow-summary{grid-template-columns:1fr}.workflow-step{padding:12px 15px}.workspace-tabs{margin-left:-4px}.card{padding:22px}}
+@media(max-width:650px){main{padding:0 16px}.workflow-summary{gap:8px}.intro h1{font-size:24px}.card{padding:19px}.fact{grid-template-columns:1fr}.fact .confirmation{grid-column:1}.progress{align-items:flex-start;flex-wrap:wrap}.progress #progress-text{min-width:60%}.card-actions{align-items:stretch;flex-wrap:wrap}.card-actions p{max-width:none}.workspace-tabs button{font-size:12px;padding:10px 12px}.calculator-source{grid-template-columns:1fr;gap:0}}

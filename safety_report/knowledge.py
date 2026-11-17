@@ -113,6 +113,23 @@ class KnowledgeBase:
             self._invalidate_index()
         return record
 
+    def create_many(self, payloads):
+        if not isinstance(payloads, list) or not 1 <= len(payloads) <= 100:
+            raise ValueError('单次导入需要 1 至 100 个可读取内容块')
+        records = []
+        for payload in payloads:
+            item = self._clean(payload)
+            timestamp = _now()
+            records.append({'id': uuid.uuid4().hex, **item, 'status': 'draft', 'revision': 1,
+                'created_at': timestamp, 'updated_at': timestamp, 'reviewed_by': '', 'history': [],
+                'audit': [{'action': 'imported', 'at': timestamp, 'status': 'draft', 'revision': 1}]})
+        with self.lock:
+            data = self._read()
+            data['records'].extend(records)
+            self._write(data)
+            self._invalidate_index()
+        return records
+
     def update(self, ident, payload):
         item = self._clean(payload)
         with self.lock:
@@ -202,6 +219,6 @@ class KnowledgeBase:
                 self.index = HybridEvidenceIndex(chunks, self.index_path, rebuild=True)
                 self.index_digest = digest
             results = self.index.search(query, max(1, min(int(limit), 20)))
-            self.index_mode = 'hybrid_qdrant_rrf' if self.index.client else 'keyword_fallback'
+            self.index_mode = 'hybrid_qdrant_rrf' if self.index.client and not self.index.semantic_error else 'keyword_fallback'
             return results
 

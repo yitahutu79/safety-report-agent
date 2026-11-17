@@ -10,7 +10,7 @@ def _identity(section):
     return title.split(maxsplit=1)[0].rstrip('.') if title[:1].isdigit() else ''
 
 
-def review_report(report, project_state, measures=(), calculations=()):
+def review_report(report, project_state, measures=(), calculations=(), professional_records=()):
     evidence = {item.get('id'): item for item in report.get('evidence', []) if item.get('id')}
     sections = report.get('sections', [])
     text_by_section = {}
@@ -102,8 +102,12 @@ def review_report(report, project_state, measures=(), calculations=()):
         ident = 'measure-' + item.get('id', '') + '-r' + str(item.get('revision', 1))
         if not any(ident in refs for refs in refs_by_section.values()):
             measure_gaps.append(item.get('recommendation', item.get('id', ''))[:80])
+    analysis_source_present = any(f.get('active', True) and f.get('document_type') == 'safety_analysis'
+                                  for f in project_state.get('files', []))
     if measure_gaps:
         add('measure_adoption', '安全措施承接', 'warning', '已决定的措施尚未在当前报告正文中引用：' + '；'.join(measure_gaps[:12]), len(measure_gaps))
+    elif analysis_source_present and not measures:
+        add('measure_adoption', '安全措施承接', 'warning', '已登记综合分析报告，但措施台账为空；请提取并逐条核对安全建议。')
     else:
         add('measure_adoption', '安全措施承接', 'pass', '已决定的措施均已在当前报告中关联，或台账暂无已决定项。')
     if pending_measure_count:
@@ -131,6 +135,55 @@ def review_report(report, project_state, measures=(), calculations=()):
     else:
         add('pending_calculations', '待复核分析计算', 'pass', '没有待复核分析/计算记录。')
 
+    # These are workflow prompts, not a claim that every category applies to every project.
+    from .professional_workflow import WORKFLOWS
+    report_type = report.get('report_type', project_state.get('report_type', 'facility_design'))
+    kinds = WORKFLOWS.get(report_type, {})
+    confirmed_kinds = {item.get('kind') for item in professional_records if item.get('status') == 'reviewed'}
+    absent = [name for kind, (name, _) in kinds.items() if kind not in confirmed_kinds]
+    pending = [item.get('title', '') for item in professional_records if item.get('status') != 'reviewed']
+    unreferenced = [item.get('title', '') for item in professional_records if item.get('status') == 'reviewed'
+                    and not any(('professional-' + item.get('id', '') + '-r' + str(item.get('revision', 1))) in refs for refs in refs_by_section.values())]
+    details = []
+    if absent:
+        details.append('以下工作尚无已复核记录，请结合项目判断是否适用：' + '、'.join(absent))
+    from .workflow_schema import SCHEMAS
+    incomplete = []
+    for item in professional_records:
+        if item.get('status') != 'reviewed':
+            continue
+        fields = SCHEMAS.get(report_type, {}).get(item.get('kind'), [])
+        missing = [field['label'] for field in fields if field.get('required') and not item.get('details', {}).get(field['key'])]
+        if missing:
+            incomplete.append(item.get('title', '') + '（缺少：' + '、'.join(missing) + '）')
+    if incomplete:
+        details.append('已复核记录的专业分项待补全：' + '；'.join(incomplete[:12]))
+    from datetime import date as _date
+    regulatory_uncertain = []
+    for item in professional_records:
+        if item.get('kind') != 'regulatory':
+            continue
+        d = item.get('details', {})
+        try:
+            age = (_date.today() - _date.fromisoformat(d.get('checked_date', ''))).days
+        except (ValueError, TypeError):
+            age = -1
+        if item.get('status') != 'reviewed' or d.get('decision') == '待确认' or not d.get('decision') or d.get('validity') != '现行' or not 0 <= age <= 365:
+            regulatory_uncertain.append(item.get('title', '未命名依据'))
+    if regulatory_uncertain:
+        details.append('法规适用性、有效状态或核验时效待确认：' + '、'.join(regulatory_uncertain[:12]))
+    open_rectifications = [item.get('title', '') for item in professional_records
+        if report_type in {'acceptance_evaluation', 'worktrade_current_evaluation', 'dual_prevention'} and item.get('kind') == 'rectification'
+        and item.get('details', {}).get('progress') != '复查通过']
+    if open_rectifications:
+        details.append('整改尚未记录为复查通过：' + '、'.join(open_rectifications[:12]))
+    if pending:
+        details.append('待处理记录：' + '、'.join(pending[:12]))
+    if unreferenced:
+        details.append('已复核但报告尚未引用：' + '、'.join(unreferenced[:12]))
+    add('professional_workflow', '专业工作记录与承接', 'warning' if details else 'pass',
+        '；'.join(details) if details else '所登记的专业工作记录已复核并关联；仍须专业人员核实完整性。')
+
     drawing_gaps = []
     for file in project_state.get('files', []):
         if file.get('active', True) and file.get('document_type') == 'drawing' and (not file.get('document_version') or not file.get('document_date')):
@@ -155,6 +208,12 @@ def review_report(report, project_state, measures=(), calculations=()):
     def source_current(item):
         if item.get('corpus') == 'approved_knowledge' and item.get('category') == 'regulation':
             return item.get('validity_status') == 'current'
+        if item.get('evidence_type') == 'regulatory_applicability':
+            try:
+                age = (date.today() - date.fromisoformat(item.get('rule_checked_date', ''))).days
+            except (ValueError, TypeError):
+                return False
+            return (item.get('rule_validity_status') == '现行' and item.get('project_applicability') == '适用' and 0 <= age <= 365)
         if item.get('evidence_type') == 'professional_calculation' and standard_pattern.search(item.get('text', '')):
             if item.get('rule_validity_status') != 'current' or not item.get('rule_checked_date'):
                 return False
@@ -167,6 +226,33 @@ def review_report(report, project_state, measures=(), calculations=()):
     regulatory_unknown.extend(item.get('source', item.get('id', '')) for item in evidence.values()
                               if item.get('evidence_type') == 'professional_calculation'
                               and standard_pattern.search(item.get('text', '')) and not source_current(item))
+    # Matching codes and a human project decision are necessary, not sufficient, for applicability.
+    def code_key(value):
+        return re.sub(r'[\s—-]+', '', value).upper()
+    report_codes = {code_key(code): code for code in standard_pattern.findall(report_text)}
+    project_applicability = set()
+    for item in professional_records:
+        if item.get('kind') != 'regulatory' or item.get('status') != 'reviewed':
+            continue
+        d = item.get('details', {})
+        try:
+            age = (date.today() - date.fromisoformat(d.get('checked_date', ''))).days
+        except (ValueError, TypeError):
+            continue
+        if d.get('decision') != '适用' or d.get('validity') != '现行' or not 0 <= age <= 365:
+            continue
+        project_applicability.update(code_key(code) for code in standard_pattern.findall(d.get('rule', '')))
+    absent_project_checks = [value for key, value in report_codes.items() if key not in project_applicability]
+    if absent_project_checks:
+        add('regulation_applicability', '本项目法规适用性', 'warning',
+            '正文提及以下标准，尚无同编号、现行且已复核的本项目适用性记录：' + '、'.join(absent_project_checks[:20]))
+    elif not report_codes:
+        add('regulation_applicability', '本项目法规适用性', 'warning',
+            '未从正文识别到标准编号；请人工核对法规清单、适用范围和可能遗漏。')
+    else:
+        add('regulation_applicability', '本项目法规适用性', 'pass',
+            '正文识别出的标准编号均有已复核的本项目适用性记录；仍需复核具体条款和可能遗漏。')
+
     cited_standard_refs = []
     for section in sections:
         body = text_by_section.get(_identity(section), '')
@@ -174,9 +260,13 @@ def review_report(report, project_state, measures=(), calculations=()):
         if not codes:
             continue
         cited = [evidence.get(ident, {}) for ident in refs_by_section.get(_identity(section), set())]
-        current_law_refs = [item for item in cited if source_current(item)]
-        if not current_law_refs:
-            cited_standard_refs.extend(f'{section.get("title", "")}: {code}' for code in codes)
+        def normalize_code(code):
+            return re.sub(r'[\s—-]+', '', code).upper()
+        for code in codes:
+            matching = [item for item in cited if source_current(item) and normalize_code(code) in
+                        {normalize_code(found) for found in standard_pattern.findall(' '.join(str(item.get(key, '')) for key in ('text', 'source', 'source_document', 'locator')))}]
+            if not matching:
+                cited_standard_refs.append(f'{section.get("title", "")}: {code}')
     if regulatory_unknown:
         add('regulation_validity', '法规标准有效性', 'fail', '报告引用了有效状态未确认为现行的知识库法规：' + '、'.join(regulatory_unknown[:12]), len(regulatory_unknown))
     elif cited_standard_refs:

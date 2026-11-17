@@ -4,6 +4,19 @@ from safety_report.agent_graph import run_chapter_graph
 
 
 class ChapterAgentGraphTests(unittest.TestCase):
+    def test_planner_format_failure_falls_back_to_chapter_and_subsections(self):
+        searched = []
+        def complete(system, payload, model, **kwargs):
+            if '资料规划 Agent' in system:
+                raise ValueError('模型未返回有效 JSON')
+            return {'paragraphs': [], 'tables': [], 'missing': ['需要补充数据'], 'review': []}
+        result = run_chapter_graph(
+            '写作规则', {'chapter': '3 危险分析', 'required_subsections': ['3.1 危险物料'], 'evidence': []},
+            {'name': 'test'}, search=lambda query: (searched.append(query) or []),
+            validate=lambda _: [], complete=complete)
+        self.assertEqual(searched, ['3 危险分析', '3.1 危险物料'])
+        self.assertIn('按章节标题和子节检索', result['agent_trace'][0]['status'])
+
     def test_planner_query_routes_to_project_evidence_search(self):
         calls = []
         evidence = {'id': 'e-flow', 'text': '工艺流程：原料接收、反应、储存。',

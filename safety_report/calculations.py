@@ -1,11 +1,11 @@
-"""Auditable project calculation records; this module intentionally performs no engineering math.
+"""Auditable calculation records and bounded preliminary engineering calculations.
 
 Only calculations reviewed by a named professional and tied to source inputs and an
 identified rule/formula are eligible to appear as report evidence. A later rule plugin
 must be versioned and validated separately before it can compute a result.
 """
 from datetime import date, datetime, timezone
-from decimal import Decimal, InvalidOperation, localcontext
+from decimal import Decimal, InvalidOperation, ROUND_CEILING, localcontext
 import json
 from pathlib import Path
 import threading
@@ -25,6 +25,68 @@ STATUSES = {'draft', 'reviewed', 'rejected'}
 FIELDS = ('kind', 'title', 'status', 'inputs', 'source_rule', 'rule_version',
           'rule_clause', 'rule_validity_status', 'rule_checked_date', 'formula', 'steps', 'result', 'result_unit', 'assumptions',
           'reviewer', 'review_note', 'report_section')
+
+
+def _sourced_number(item, label, unit):
+    if not isinstance(item, dict):
+        raise ValueError(label + '输入无效')
+    try:
+        value = Decimal(str(item.get('value', '')))
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValueError(label + '必须为有效数字') from None
+    if not value.is_finite() or not 0 < value <= Decimal('1000000000'):
+        raise ValueError(label + '必须大于零且不超过允许范围')
+    source = item.get('source_file', '')
+    locator = item.get('source_locator', '')
+    if not isinstance(source, str) or not isinstance(locator, str) or not source.strip() or not locator.strip():
+        raise ValueError(label + '必须提供来源文件及位置')
+    return value, {'name': label, 'value': format(value, 'f'), 'unit': unit,
+                   'source_file': source.strip(), 'source_locator': locator.strip(), 'evidence_id': ''}
+
+
+def calculate_fire_water(systems):
+    """Sum expert-selected simultaneous systems for one fire scenario; no system selection."""
+    if not isinstance(systems, list) or not 1 <= len(systems) <= 30:
+        raise ValueError('请填写 1 至 30 个同一火灾场景下需同时作用的系统')
+    inputs, lines, total = [], [], Decimal(0)
+    for row in systems:
+        name = row.get('name', '').strip() if isinstance(row, dict) and isinstance(row.get('name'), str) else ''
+        if not name or len(name) > 80:
+            raise ValueError('请填写每个消防系统的名称（最多 80 字）')
+        flow, flow_input = _sourced_number(row.get('flow'), name + '设计流量', 'L/s')
+        duration, duration_input = _sourced_number(row.get('duration'), name + '持续时间', 'h')
+        volume = Decimal('3.6') * flow * duration
+        total += volume
+        inputs.extend([flow_input, duration_input])
+        lines.append(f'{name}：3.6 × {flow} L/s × {duration} h = {volume} m³')
+    rounded = total.quantize(Decimal('0.001'), rounding=ROUND_CEILING)
+    return {'inputs': inputs, 'formula': 'V = 3.6 × Σ(qᵢ × tᵢ)',
+            'steps': '；'.join(lines) + f'；合计 {rounded} m³（向上保留三位小数）',
+            'result': format(rounded, 'f'), 'result_unit': 'm³',
+            'assumptions': '仅计算人工选定的同一建筑、同一火灾场景下需同时作用的系统。系统组合、设计流量、持续时间、火灾次数、其他水量及多建筑最大值均由专业人员核定；结果不等同消防水池最终容积。'}
+
+
+def calculate_distance_margin(actual, reference):
+    """Subtract a manually selected reference distance; never declare compliance."""
+    measured, measured_row = _sourced_number(actual, '实测或图示距离', 'm')
+    required, required_row = _sourced_number(reference, '人工选定的参考距离', 'm')
+    margin = measured - required
+    return {'inputs': [measured_row, required_row], 'formula': '差值 = 实测或图示距离 − 人工选定的参考距离',
+            'steps': f'{measured} m − {required} m = {margin} m', 'result': format(margin, 'f'),
+            'result_unit': 'm', 'assumptions': '仅计算输入值之差，不自动选择法规、规范条款、建筑类别、测量基准或修正条件，也不判断合规性。参考值及其适用范围、数据版本和测量方式须由专业人员核验。'}
+
+
+def calculate_pressure_relief(volume, coefficient):
+    """Evaluate the factory building expression A=10CV^(2/3), with expert-selected inputs."""
+    v, v_input = _sourced_number(volume, '厂房计算段容积 V', 'm³')
+    c, c_input = _sourced_number(coefficient, '泄压比 C', 'm²/m³')
+    with localcontext() as context:
+        context.prec = 36
+        area = (Decimal(10) * c * (v ** (Decimal(2) / Decimal(3)))).quantize(Decimal('0.001'), rounding=ROUND_CEILING)
+    return {'inputs': [v_input, c_input], 'formula': 'A = 10 × C × V^(2/3)',
+            'steps': f'A = 10 × {c} × {v}^(2/3) = {area} m²（向上保留三位小数）',
+            'result': format(area, 'f'), 'result_unit': 'm²',
+            'assumptions': '仅计算经专业人员确认适用该式的厂房计算段。泄压比 C、体积、长径比及必要的分段、公共截面扣除、泄压构件与其他专项标准要求均由专业人员核验；不得用于设备、容器等其他对象。'}
 
 
 def calculate_major_hazard_indicator(unit_name, unit_source_file, unit_locator, materials):
