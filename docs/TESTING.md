@@ -15,3 +15,7 @@
 运行检查：`python -m pytest -q`，`node --check web/app.js`，`node --check web/product-design.js`。
 
 跨平台桌面打包需另行运行 GitHub Actions 的 Build desktop distributions 工作流；本次本地检查不能代替各平台安装和现场验收。
+
+## 合并 windows-support 后验证
+
+已合入 Windows 启停及环境初始化支持、知识库句柄释放、复杂 PDF 页备用解析器。解决 PDF 解析冲突后，154项测试通过，两个前端脚本语法检查通过。测试在 macOS 执行，Windows 原生启停和安装仍需 Windows 机器验证。

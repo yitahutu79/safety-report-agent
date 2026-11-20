@@ -16,6 +16,21 @@ v0.6.0 在点击生成后自动按本次章节范围预检资料缺口；发现�
 
 标准实施、数据确认、测试记录和交付模板见 [交付与验收目录](docs/交付与验收/项目实施与验收控制.md)、[测试计划](docs/交付与验收/测试计划与记录.md)、[交付清单](docs/交付与验收/软件交付物清单.md) 和 [技术说明](docs/交付与验收/技术说明.md)。安装包平台与甲方样本、验收阈值仍需双方确认。
 
+## Windows 独立运行
+
+Windows 10/11 首次使用时，先安装 Python 3.13，再双击根目录的 `初始化Windows环境.cmd`。当前 Windows 开发机优先使用 `E:\download\Python313\python.exe`，其他电脑可通过 Python Launcher 提供 `py -3.13`。初始化程序会在项目目录创建独立的 `.venv` 环境，安装 `requirements-dev.txt` 中记录的运行与测试依赖，并执行基础导入检查。该环境和依赖不会提交到 Git 仓库，也不会修改 Mac 的运行环境。
+
+初始化成功后，双击 `启动工作台-Windows.cmd`。启动入口在后台运行本项目的 Python 服务，等待页面就绪后打开 `http://127.0.0.1:8765`，运行日志保存在 `data/logs/windows-workbench.log`。使用结束并确认任务已完成后，双击 `停止工作台-Windows.cmd`；停止入口只结束本项目记录的进程，不会批量结束电脑上的其他 Python 程序。
+
+开发者也可以在 PowerShell 中执行：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m safety_report
+```
+
+若需要构建 Windows 桌面包，再安装 `requirements-desktop.txt` 并执行 `tools/build_desktop.py`。桌面包必须在 Windows 原生环境构建和验证。
+
 ## Mac 独立运行
 
 双击根目录的 `启动工作台.command`。页面地址为 `http://127.0.0.1:8765`。服务由 macOS 用户后台任务管理，关闭终端、浏览器或聊天不会停止；退出登录、关机或重启后需再次双击启动。等待任务结束后，可双击 `停止工作台.command` 停止。
@@ -31,7 +46,7 @@ python3 -m venv .venv
 
 中文语义检索使用 Qdrant 本地持久化模式和 `BAAI/bge-small-zh-v1.5` FastEmbed 模型。第一次分析项目资料时会从模型仓库下载模型，之后索引保存在该项目 `data/<项目ID>/knowledge/qdrant/` 下。首次下载需要网络；离线环境需预先缓存模型文件。用户资料和向量索引留在本机项目目录，生成报告时仍只向页面所配置的大模型服务发送检索到的章节证据。
 
-需要 Python 3.11+。模型在页面“模型设置”中配置并保存到 `data/settings.json`，密钥不经 GET 接口回传，文件权限设为 0600。换供应商或服务地址时，不复用旧地址的密钥。开发启动也可使用 `python3 -m safety_report`。
+运行代码最低需要 Python 3.11；协同开发环境和 GitHub Actions 统一使用 Python 3.13。模型在页面“模型设置”中配置并保存到 `data/settings.json`，密钥不经 GET 接口回传，文件权限设为 0600。换供应商或服务地址时，不复用旧地址的密钥。开发启动也可使用 `python3 -m safety_report`；Windows 使用 `.\.venv\Scripts\python.exe -m safety_report`。
 
 `tools/run_workbench.py` 会读取根目录 `.env` 中允许的设置项，不执行 shell 插值。网页选择的模型配置按任务快照传入，不通过修改进程环境切换模型。原环境变量配置仍可作为“管理员环境配置”使用。
 
@@ -109,6 +124,13 @@ Docker 数据位于 Compose 的 `report-data` 持久化卷，开发数据在根�
 
 ```sh
 .venv/bin/python -m unittest discover -s tests -v
+node --check web/app.js
+```
+
+Windows 开发环境使用：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
 node --check web/app.js
 ```
 

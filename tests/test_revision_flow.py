@@ -385,7 +385,9 @@ class RevisionHTTPTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        cls.http.shutdown();cls.http.server_close();cls.thread.join(timeout=5);server.DATA=cls.previous_data;cls.temp.cleanup()
+        cls.http.shutdown();cls.http.server_close();cls.thread.join(timeout=5)
+        server.close_knowledge_stores(cls.temp.name)
+        server.DATA=cls.previous_data;cls.temp.cleanup()
 
     def request(self,path,data=None,raw=None):
         body=raw if raw is not None else json.dumps(data).encode() if data is not None else None
