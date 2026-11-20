@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import urllib.request
 import urllib.error
 import zipfile
@@ -57,6 +57,28 @@ class PipelineTests(unittest.TestCase):
         path = self.root / '资料.txt'
         path.write_text('建设单位：测试公司', encoding='utf-8')
         self.assertEqual(parse_file(path)['chunks'], parse_file(path)['chunks'])
+
+    def test_pdf_recovers_complex_page_and_keeps_readable_pages(self):
+        path = self.root / '图纸.pdf'
+        path.write_bytes(b'fixture')
+        reader = Mock()
+        reader.pages = [
+            Mock(extract_text=Mock(return_value='首页正文' * 10)),
+            Mock(extract_text=Mock(side_effect=ValueError('complex page'))),
+            Mock(extract_text=Mock(side_effect=ValueError('unreadable page'))),
+            Mock(extract_text=Mock(return_value='末页正文' * 10)),
+        ]
+        with patch('pypdf.PdfReader', return_value=reader), patch(
+            'safety_report.documents._extract_pdf_page_with_pdfium',
+            side_effect=['恢复的第二页正文' * 10, ValueError('fallback also failed')],
+        ) as fallback:
+            result = parse_file(path)
+
+        self.assertEqual([call.args for call in fallback.call_args_list], [(path, 1), (path, 2)])
+        self.assertEqual([chunk['locator'] for chunk in result['chunks']], ['page[1]', 'page[2]', 'page[4]'])
+        self.assertIn('恢复的第二页正文', result['chunks'][1]['text'])
+        self.assertTrue(any('第 2 页已用备用解析器恢复文字' in warning for warning in result['warnings']))
+        self.assertTrue(any('第 3 页文本提取失败' in warning for warning in result['warnings']))
 
     def test_irrelevant_evidence_is_not_selected(self):
         self.assertEqual(retrieve([{'text': 'ABC', 'id': 'x'}], '消防用水'), [])

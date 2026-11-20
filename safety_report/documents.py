@@ -85,6 +85,23 @@ def inspect_template(path):
                       "仅作结构和格式参考，原项目事实与规范引用不能自动沿用"]}
 
 
+def _extract_pdf_page_with_pdfium(path, page_index):
+    import pypdfium2
+    from .assets import PDF_LOCK
+
+    # Share the renderer's lock because PDFium calls are not thread-safe.
+    with PDF_LOCK, pypdfium2.PdfDocument(path) as pdf:
+        page = pdf[page_index]
+        try:
+            text_page = page.get_textpage()
+            try:
+                return text_page.get_text_bounded().strip()
+            finally:
+                text_page.close()
+        finally:
+            page.close()
+
+
 def parse_file(path):
     path = Path(path)
     suffix = path.suffix.lower()
@@ -98,12 +115,23 @@ def parse_file(path):
         except ImportError as exc:
             raise ValueError("PDF 解析依赖未安装；请使用 Docker 版本或安装 requirements.txt") from exc
         blocks = []
-        for i, page in enumerate(PdfReader(path).pages, 1):
-            text = page.extract_text() or ""
-            if len(text.strip()) < 30:
+        pages = PdfReader(path).pages
+        for i in range(1, len(pages) + 1):
+            try:
+                text = (pages[i - 1].extract_text() or "").strip()
+            except Exception as exc:
+                try:
+                    text = _extract_pdf_page_with_pdfium(path, i - 1)
+                except Exception:
+                    text = ""
+                if not text:
+                    warnings.append(f"第 {i} 页文本提取失败（{type(exc).__name__}），请检查原图或使用 OCR；其余页继续读取")
+                    continue
+                warnings.append(f"第 {i} 页已用备用解析器恢复文字，图纸字段仍需对照原图核对")
+            if len(text) < 30:
                 warnings.append(f"第 {i} 页缺少文本层，需要 OCR 或图纸人工核对")
-            if text.strip():
-                blocks.append({"kind": "paragraph", "text": text.strip(), "locator": f"page[{i}]"})
+            if text:
+                blocks.append({"kind": "paragraph", "text": text, "locator": f"page[{i}]"})
     elif suffix == ".csv":
         rows = list(csv.reader(io.StringIO(decode(path.read_bytes()))))
         blocks = [{"kind": "table", "rows": rows, "text": "\n".join(" | ".join(r) for r in rows), "locator": "csv[1]"}]
