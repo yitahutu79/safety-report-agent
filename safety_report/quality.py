@@ -45,6 +45,32 @@ def review_report(report, project_state, measures=(), calculations=(), professio
         add('source_conflicts', '资料冲突', 'pass', '项目字段中未标记待处理的冲突。')
 
     report_text = '\n'.join(text_by_section.values())
+    source_dumps = [s.get('title', '') for s in sections
+                    if any(re.search(r'(?:资料|原文|内容)\s*摘录\s*[:：]?', p.get('text', ''))
+                           for p in s.get('paragraphs', []))]
+    if source_dumps:
+        add('source_dump', '存量正文摘录检查', 'fail',
+            '以下章节仍有资料摘录标记，不能视为完成的报告正文：' + '、'.join(source_dumps), len(source_dumps))
+    else:
+        add('source_dump', '存量正文摘录检查', 'pass', '未检测到显式摘录标记；不代表语义或专业质量已审核通过。')
+
+    # Only compare explicitly named development zones, not every company or address:
+    # landlords, suppliers and registration addresses may legitimately differ.
+    address = next((f.get('value', '') for f in project_state.get('fields', [])
+                    if f.get('key') == 'address' and f.get('confirmed')), '')
+    zone_pattern = r'[\u4e00-\u9fff]{2,12}?(?:经济技术开发区|经济开发区|高新技术产业开发区)'
+    expected_zones = re.findall(zone_pattern, address)
+    zone_mismatches = []
+    if expected_zones:
+        for location in re.findall(r'本项目(?:位于|建设地点为|建设地址为)([^，。；\n]{2,100})', report_text):
+            for zone in re.findall(zone_pattern, location):
+                if not any(zone.endswith(expected) or expected.endswith(zone) for expected in expected_zones):
+                    zone_mismatches.append(zone)
+    if zone_mismatches:
+        add('project_location_scope', '项目场址表述核对', 'warning',
+            '正文以本项目名义描述了不同的开发区名称：' + '、'.join(dict.fromkeys(zone_mismatches)) +
+            '；请核实是否混入其他项目资料，名称差异本身不直接证明不同地点。', len(zone_mismatches))
+
     contradictory_values = []
     critical_keys = {'company', 'project', 'address', 'capacity', 'investment', 'area', 'nature'}
     for field in project_state.get('fields', []):
@@ -92,7 +118,7 @@ def review_report(report, project_state, measures=(), calculations=(), professio
     elif missing_sections:
         add('chapter_completion', '章节完整性', 'warning', '有待补充信息的章节：' + '、'.join(missing_sections), len(missing_sections))
     else:
-        add('chapter_completion', '章节完整性', 'pass', '章节没有登记待补充信息。')
+        add('chapter_completion', '章节完整性', 'warning', '章节未登记缺项；空缺项清单不能证明内容完整，须对照确认的目录及事实清单复核。')
 
     measure_gaps = []
     pending_measure_count = sum(item.get('disposition') == 'pending' for item in measures)

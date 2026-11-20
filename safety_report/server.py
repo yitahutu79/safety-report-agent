@@ -22,6 +22,7 @@ from .pipeline import analyze, generate, merge_fields, extract_model_fields, val
 from .documents import retrieve, parse_file
 from .rag_workbench import search_project, retrieval_metrics
 from . import provider, settings, assets, versions, knowledge_qa
+from .node_checkpoint import NodeCheckpoint
 from .knowledge import CATEGORIES, KnowledgeBase
 from .measures import MeasuresLedger
 from .calculations import (CalculationLedger, KINDS as CALCULATION_KINDS, calculate_major_hazard_indicator,
@@ -175,7 +176,8 @@ def export_report(target, report, output, files):
         metadata = load(target / 'map.json', {})
         figures.append({'path': str(target / 'map.png'), 'caption': '建设项目地理位置图',
                         'source': '高德地图 ' + metadata.get('captured_at', '')})
-    report['figure_warnings'] = warnings
+    figures, placement_warnings = assets.resolve_figure_placements(report, figures)
+    report['figure_warnings'] = warnings + placement_warnings
     state = upgrade_state(load(target / 'state.json'))
     write_docx(report, report_profile(state['report_type'], load(PROFILE)), output, figures)
 
@@ -211,12 +213,27 @@ def chapter_materials_plan(target, chapter_id, model, cancel_event=None):
 
 def preflight_job(target, chapter_ids, model, cancel_event):
     try:
+        state = upgrade_state(load(target / 'state.json'))
+        scope = {'analysis': load(target / 'analysis.json'), 'fields': state['fields'],
+                 'report_type': state['report_type'], 'report': versions.load_report(target),
+                 'profile': load(PROFILE), 'model': model, 'date': date.today().isoformat(),
+                 'professional': ProfessionalLedger(target / 'professional.json', state['report_type']).report_evidence()}
+        checkpoint = NodeCheckpoint(target / 'preflight-checkpoints.json', scope)
         plans = []
         for index, chapter_id in enumerate(chapter_ids, 1):
             if cancel_event.is_set():
                 raise provider.GenerationCancelled()
-            state_update(target, message=f'正在检查资料需求 {index}/{len(chapter_ids)}')
-            plans.append(chapter_materials_plan(target, chapter_id, model, cancel_event))
+            key = checkpoint.key('preflight', {'payload': {'chapter_id': chapter_id}})
+            plan = checkpoint.get(key)
+            if plan is not None:
+                state_update(target, message=f'已恢复资料检查 {index}/{len(chapter_ids)}')
+            else:
+                state_update(target, message=f'正在检查资料需求 {index}/{len(chapter_ids)}')
+                plan = chapter_materials_plan(target, chapter_id, model, cancel_event)
+                if cancel_event.is_set():
+                    raise provider.GenerationCancelled()
+                checkpoint.put(key, plan)
+            plans.append(plan)
         if cancel_event.is_set():
             raise provider.GenerationCancelled()
         state_update(target, busy=False, cancel_requested=False, current_operation='',
@@ -287,6 +304,19 @@ def job(target, operation, use_llm=False, model=None, chapter_ids=None, instruct
             validate_ready(state['fields'])
             previous = versions.load_report(target)
             profile = report_profile(state['report_type'], load(PROFILE))
+            measure_evidence = MeasuresLedger(target / 'measures.json').report_evidence()
+            calculation_evidence = CalculationLedger(target / 'calculations.json').report_evidence()
+            professional_evidence = ProfessionalLedger(target / 'professional.json', state['report_type']).report_evidence()
+            kb_path = DATA / 'knowledge-base.json'
+            kb_digest = hashlib.sha256(kb_path.read_bytes()).hexdigest() if kb_path.exists() else ''
+            # A checkpoint belongs to this exact request, project state, KB revision and model.
+            # The API key contributes only to a one-way digest and is never saved in the checkpoint.
+            scope = {'analysis': analysis, 'fields': state['fields'], 'profile': profile, 'previous': previous,
+                     'model': model, 'chapters': chapter_ids, 'instructions': instructions,
+                     'supplement_answers': supplement_answers, 'supplement_chapter': supplement_chapter,
+                     'measures': measure_evidence, 'calculations': calculation_evidence,
+                     'professional': professional_evidence, 'knowledge': kb_digest, 'date': date.today().isoformat()}
+            node_checkpoint = NodeCheckpoint(target / 'node-checkpoints.json', scope) if use_llm else None
             report = generate(profile, analysis, state['fields'], use_llm,
                 lambda text: state_update(target, message=text), model=model, previous=previous,
                 chapter_ids=chapter_ids, instructions=instructions,
@@ -294,14 +324,13 @@ def job(target, operation, use_llm=False, model=None, chapter_ids=None, instruct
                 cancel_event=cancel_event, retrieval_path=target / 'knowledge' / 'qdrant',
                 supplement_answers=supplement_answers, supplement_chapter=supplement_chapter,
                 knowledge_retriever=knowledge_base().search,
-                measure_evidence=MeasuresLedger(target / 'measures.json').report_evidence(),
-                calculation_evidence=CalculationLedger(target / 'calculations.json').report_evidence(),
-                professional_evidence=ProfessionalLedger(target / 'professional.json', state['report_type']).report_evidence())
+                measure_evidence=measure_evidence, calculation_evidence=calculation_evidence,
+                professional_evidence=professional_evidence, node_checkpoint=node_checkpoint)
             if cancel_event and cancel_event.is_set():
                 raise provider.GenerationCancelled()
             report['source_revision'] = state['data_revision']
             report['attachments'] = [{k: f.get(k, '') for k in ('name', 'sha256', 'role', 'include', 'pages', 'caption', 'status',
-                'document_type', 'document_source', 'document_date', 'document_version')} for f in state['files'] if f.get('active', True)]
+                'document_type', 'document_source', 'document_date', 'document_version', 'figure_placement')} for f in state['files'] if f.get('active', True)]
             report['quality_review'] = review_report(report, state,
                 MeasuresLedger(target / 'measures.json').list(),
                 CalculationLedger(target / 'calculations.json').list(),
@@ -323,8 +352,10 @@ def job(target, operation, use_llm=False, model=None, chapter_ids=None, instruct
                 expected = {re.match(r'\d+', h['text']).group() for h in profile['headings'] if h['level'] == 1}
                 still_outdated = state['source_changes_pending'] and chapter_ids is not None and set(chapter_ids) != expected
                 state_update(target, busy=False, cancel_requested=False, current_operation='', stage='done', report_outdated=still_outdated, source_changes_pending=still_outdated, report_version=meta['id'], message=message, error='')
+                if node_checkpoint:
+                    node_checkpoint.clear()
     except provider.GenerationCancelled:
-        state_update(target, busy=False, cancel_requested=False, current_operation='', message='已停止生成；未完成内容已丢弃，上一版草稿保留', error='')
+        state_update(target, busy=False, cancel_requested=False, current_operation='', message='已停止生成；已完成节点保存在本地，再次使用相同设置可继续，上一版草稿保留', error='')
     except Exception as exc:
         logging.exception('后台任务失败：%s', operation)
         message = str(exc) if isinstance(exc, ValueError) else '处理失败，原草稿已保留；请检查资料或联系管理员查看日志'
@@ -383,12 +414,19 @@ class Handler(BaseHTTPRequestHandler):
         try:
             parsed = urlsplit(self.path)
             path, query = parsed.path, parse_qs(parsed.query)
-            static = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8'), '/experience.css': ('experience.css', 'text/css; charset=utf-8'), '/brand-mark.svg': ('brand-mark.svg', 'image/svg+xml'), '/manifest.webmanifest': ('manifest.webmanifest', 'application/manifest+json')}
+            static = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8'), '/experience.css': ('experience.css', 'text/css; charset=utf-8'), '/product-design.css': ('product-design.css', 'text/css; charset=utf-8'), '/product-design.js': ('product-design.js', 'text/javascript; charset=utf-8'), '/brand-mark.svg': ('brand-mark.svg', 'image/svg+xml'), '/manifest.webmanifest': ('manifest.webmanifest', 'application/manifest+json')}
             if path in static:
                 name, mime = static[path]
                 return self.send_bytes(200, (ROOT / 'web' / name).read_bytes(), mime)
             if not self.authorized():
                 return self.json({'error': '请登录工作台', 'login_required': True}, 401)
+            if path == '/api/test-record':
+                record = ROOT / 'docs' / '全流程测试记录-2026-11-17.md'
+                if not record.is_file():
+                    record = ROOT / 'docs' / 'TESTING.md'
+                if not record.is_file():
+                    return self.json({'error': '当前软件包没有这份测试记录'}, 404)
+                return self.json({'content': record.read_text(encoding='utf-8')})
             if path == '/api/settings':
                 return self.json(settings.public(DATA))
             if path == '/api/status':
@@ -413,6 +451,11 @@ class Handler(BaseHTTPRequestHandler):
                 results = store.search(query.get('q', [''])[0], int(query.get('limit', ['10'])[0]))
                 return self.json({'results': results, 'retrieval_mode': store.index_mode,
                                   'approved_only': True})
+            if path == '/api/projects-trash':
+                trash = DATA / '.trash'
+                with LOCK:
+                    projects = [load(p) for p in trash.glob('*/state.json')]
+                return self.json(sorted(projects, key=lambda p: p.get('updated_at', 0), reverse=True))
             if path == '/api/projects':
                 with LOCK:
                     projects = [load(p) for p in DATA.glob('*/state.json')]
@@ -434,6 +477,11 @@ class Handler(BaseHTTPRequestHandler):
                     if not report:
                         return self.json({'report': None})
                     public = {k: v for k, v in report.items() if k != 'evidence'}
+                    # Read-time check: flag stale drafts without modifying their saved snapshot.
+                    view_state = upgrade_state(load(target / 'state.json'))
+                    view_review = review_report(report, view_state, MeasuresLedger(target / 'measures.json').list(), CalculationLedger(target / 'calculations.json').list(), ProfessionalLedger(target / 'professional.json', view_state['report_type']).list())
+                    public['quality_review'] = view_review
+                    public['quality_review_scope'] = '查看时复核（含当前台账）；不覆盖历史版本审核快照'
                     return self.json({'report': public, 'version': load(target / 'state.json').get('report_version', '')})
             if action == 'professional':
                 state = upgrade_state(load(target / 'state.json'))
@@ -464,6 +512,14 @@ class Handler(BaseHTTPRequestHandler):
                     result['downloads'] = [n for n in sorted(DOWNLOADS) if (target / n).exists()]
                     result['versions'] = versions.history(target)
                     result['has_report'] = (target / 'report.json').exists()
+                    report_for_figures = versions.load_report(target) if result['has_report'] else None
+                    if report_for_figures:
+                        for item in result['files']:
+                            if item.get('figure_placement', {}).get('section_id'):
+                                checked, notes = assets.resolve_figure_placements(report_for_figures,
+                                    [{'caption': item.get('caption') or item['name'], 'placement': item['figure_placement']}])
+                                item['figure_placement_warning'] = notes[0] if notes else ''
+                                item['figure_resolved_placement'] = checked[0]['placement']
                 return self.json(result)
             return self.json({'error': '页面不存在'}, 404)
         except (ValueError, OSError, TypeError, KeyError) as exc:
@@ -548,7 +604,31 @@ class Handler(BaseHTTPRequestHandler):
                     'files': [], 'fields': [], 'warnings': [], 'updated_at': time.time(), 'chunk_count': 0})
                 save(target / 'state.json', state)
                 return self.json(state, 201)
-            match = re.fullmatch(r'/api/projects/([a-f0-9]{24})/(upload|analyze|facts|generate|preflight|materials-plan|cancel|flow|geocode|map|files|edit|restore|measures|calculations|professional|rag-test|knowledge-qa)', path)
+            trash_match = re.fullmatch(r'/api/projects/([a-f0-9]{24})/(trash|restore-project)', path)
+            if trash_match:
+                import shutil
+                pid, operation = trash_match.groups()
+                with project_lock(pid):
+                    trash = DATA / '.trash' / pid
+                    target = DATA / pid
+                    if operation == 'trash':
+                        target = directory(pid)
+                        editable(target)
+                        state = load(target / 'state.json')
+                        if self.input_json().get('name') != state['name']:
+                            raise ValueError('项目名称不匹配，未删除')
+                        if trash.exists():
+                            raise ValueError('回收站已有同编号项目，请先恢复')
+                        trash.parent.mkdir(parents=True, exist_ok=True)
+                        with LOCK:
+                            shutil.move(str(target), str(trash))
+                    else:
+                        if not (trash / 'state.json').is_file() or target.exists():
+                            raise ValueError('回收站中没有可恢复的项目，或项目已存在')
+                        with LOCK:
+                            shutil.move(str(trash), str(target))
+                    return self.json({'ok': True})
+            match = re.fullmatch(r'/api/projects/([a-f0-9]{24})/(upload|analyze|facts|generate|preflight|materials-plan|cancel|ack-error|clear-node-progress|flow|geocode|map|files|edit|restore|measures|calculations|professional|rag-test|knowledge-qa)', path)
             if not match:
                 return self.json({'error': '接口不存在'}, 404)
             target, action = directory(match[1]), match[2]
@@ -556,6 +636,16 @@ class Handler(BaseHTTPRequestHandler):
                 if action != 'cancel':
                     editable(target)
                 state = upgrade_state(load(target / 'state.json'))
+                if action == 'ack-error':
+                    data = self.input_json()
+                    error = state.get('error', '')
+                    if not error:
+                        return self.json({'ok': True})
+                    if data.get('expected_error') != error:
+                        raise ValueError('项目状态已更新，请刷新后再关闭提示')
+                    state_update(target, error='', last_acknowledged_error=error,
+                        last_acknowledged_error_at=time.time(), message='已关闭上次任务的错误提示')
+                    return self.json({'ok': True})
                 if action == 'knowledge-qa':
                     data = self.input_json()
                     scope, question = data.get('scope'), data.get('question', '')
@@ -756,6 +846,11 @@ class Handler(BaseHTTPRequestHandler):
                         data_revision=state['data_revision'] + 1, message='已补充资料；已有信息和草稿均保留')
                     return self.json({'ok': True, 'file_id': ident, 'message': '资料已接收'})
                 data = self.input_json()
+                if action == 'clear-node-progress':
+                    (target / 'node-checkpoints.json').unlink(missing_ok=True)
+                    (target / 'preflight-checkpoints.json').unlink(missing_ok=True)
+                    state_update(target, message='已清除未完成节点的本地进度；报告版本保留')
+                    return self.json({'ok': True})
                 if action == 'cancel':
                     with LOCK:
                         event = JOB_CANCELLATIONS.get(str(target))
@@ -784,6 +879,35 @@ class Handler(BaseHTTPRequestHandler):
                     if 'pages' in data:
                         assets.parse_pages(data['pages'])
                         file['pages'] = data['pages']
+                    if 'figure_placement' in data:
+                        if data.get('figure_placement_base_version', '') != state.get('report_version', ''):
+                            raise ValueError('报告已有新版本，请刷新后重新选择图件位置')
+                        placement = data['figure_placement']
+                        if not isinstance(placement, dict) or set(placement) - {'section_id', 'paragraph_index'}:
+                            raise ValueError('图件插入位置格式不正确')
+                        section_id = placement.get('section_id', '')
+                        index = placement.get('paragraph_index', None)
+                        if not isinstance(section_id, str) or len(section_id) > 100:
+                            raise ValueError('请选择有效的章节')
+                        if not section_id:
+                            if index is not None:
+                                raise ValueError('文末位置不能指定正文段落')
+                            file['figure_placement'] = {}
+                        else:
+                            report_for_position = versions.load_report(target)
+                            if not report_for_position:
+                                raise ValueError('请先生成草稿，再选择章节或段落')
+                            from .pipeline import section_identity
+                            section = next((item for item in report_for_position.get('sections', []) if section_identity(item) == section_id), None)
+                            if not section:
+                                raise ValueError('章节不存在，请刷新后重新选择')
+                            if index is not None and (isinstance(index, bool) or not isinstance(index, int) or index < 0 or index >= len(section.get('paragraphs', []))):
+                                raise ValueError('段落不存在，请刷新报告并重新选择')
+                            result = {'section_id': section_id, 'paragraph_index': index}
+                            if index is not None:
+                                text = section['paragraphs'][index].get('text', '')
+                                result['paragraph_hash'] = hashlib.sha256(text.encode('utf-8')).hexdigest()
+                            file['figure_placement'] = result
                     if 'document_type' in data:
                         if data['document_type'] not in {'project_filing','company_certificate','process','materials','drawing','safety_analysis','historical_design','expert_review','other'}:
                             raise ValueError('资料类型无效')

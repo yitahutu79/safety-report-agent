@@ -15,6 +15,11 @@ def curate_sources(chapter, evidence, model, complete, cancel_event=None):
         raise provider.GenerationCancelled()
     if not evidence:
         return []
+    if provider.is_local_ollama(model) and len(evidence) > 3:
+        rows = []
+        for start in range(0, len(evidence), 3):
+            rows.extend(curate_sources(chapter, evidence[start:start + 3], model, complete, cancel_event))
+        return rows
     inputs = [{k: item.get(k, '') for k in ('id','source','locator','corpus','validity_status','applicability','document_type','text')} for item in evidence]
     for item in inputs:
         item['text'] = str(item['text'])[:1200]

@@ -8,6 +8,7 @@ COPY safety_report ./safety_report
 COPY web ./web
 COPY reference ./reference
 COPY skills ./skills
+COPY docs/TESTING.md ./docs/TESTING.md
 COPY third_party ./third_party
 RUN useradd --uid 10001 --create-home appuser && mkdir /app/data && chown appuser:appuser /app/data
 USER appuser

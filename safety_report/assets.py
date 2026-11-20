@@ -112,8 +112,43 @@ def collect_figures(target, files):
             for page in pages:
                 figures.append({'path': str(render_file(target, file, page)),
                     'caption': file.get('caption') or file['name'],
-                    'source': file['name'] + (f' 第{page}页' if suffix == '.pdf' else '')})
+                    'source': file['name'] + (f' 第{page}页' if suffix == '.pdf' else ''),
+                    'placement': file.get('figure_placement', {})})
         except Exception as exc:
             message = str(exc) if isinstance(exc, ValueError) else '文件无法渲染，请检查是否损坏、加密或格式不匹配'
             warnings.append(file['name'] + '：' + message)
     return figures, warnings
+
+
+def resolve_figure_placements(report, figures):
+    """Resolve saved anchors against this report; unsafe anchors go to appendix."""
+    import hashlib
+    from .pipeline import section_identity
+    sections = {section_identity(s): s for s in report.get('sections', [])}
+    warnings = []
+    resolved = []
+    for original in figures:
+        figure = dict(original)
+        location = dict(figure.get('placement') or {})
+        section_id = location.get('section_id')
+        if section_id:
+            section = sections.get(section_id)
+            reason = ''
+            if not section:
+                reason = '指定章节不存在'
+            elif section.get('generation_status') in {'not_generated', 'failed'} or section.get('needs_rewrite') or section.get('generation_error'):
+                reason = '指定章节未生成或生成失败'
+            elif location.get('paragraph_index') is not None:
+                expected = location.get('paragraph_hash', '')
+                matches = [i for i, p in enumerate(section.get('paragraphs', []))
+                           if hashlib.sha256(p.get('text', '').encode('utf-8')).hexdigest() == expected]
+                if len(matches) == 1:
+                    location['paragraph_index'] = matches[0]
+                else:
+                    reason = '指定段落已变化、删除或存在重复文本'
+            if reason:
+                warnings.append((figure.get('caption') or '图件') + '：' + reason + '，已放到文末“项目图件”，请重新选择位置。')
+                location = {}
+        figure['placement'] = location
+        resolved.append(figure)
+    return resolved, warnings

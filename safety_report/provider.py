@@ -5,9 +5,22 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import threading
+import time
+from contextvars import ContextVar
+
+CALL_STATS = ContextVar("model_call_stats", default=None)
 
 _ACTIVE_LOCK = threading.Lock()
 _ACTIVE_SOCKETS = {}
+
+
+class ModelDeadlineExceeded(ValueError):
+    pass
+
+
+def is_local_ollama(config):
+    config = config or {}
+    return config.get("provider") == "ollama" and urllib.parse.urlsplit(config.get("base_url", "")).hostname in {"localhost", "127.0.0.1", "::1"}
 
 
 class GenerationCancelled(Exception):
@@ -70,13 +83,29 @@ def request_json(config, suffix, body=None, timeout=240, cancel_event=None):
         headers['Authorization'] = 'Bearer ' + config['api_key']
     request = urllib.request.Request(config['base_url'] + suffix,
         data=json.dumps(body, ensure_ascii=False).encode() if body is not None else None, headers=headers)
+    deadline = time.monotonic() + timeout
+    expired = threading.Event()
+    watchdog = None
     try:
+        if cancel_event and cancel_event.is_set():
+            raise GenerationCancelled()
         with urllib.request.build_opener(NoRedirect()).open(request, timeout=timeout) as response:
+            sock = getattr(getattr(getattr(response, 'fp', None), 'raw', None), '_sock', None)
+            def expire():
+                expired.set()
+                if sock:
+                    try:
+                        sock.shutdown(2)
+                    except OSError:
+                        pass
+            watchdog = threading.Timer(max(0, deadline - time.monotonic()), expire)
+            watchdog.daemon = True
+            watchdog.start()
             if cancel_event and cancel_event.is_set():
                 raise GenerationCancelled()
-            if cancel_event and body and body.get('stream'):
+            if body and body.get('stream'):
                 sock = getattr(getattr(getattr(response, 'fp', None), 'raw', None), '_sock', None)
-                if sock:
+                if sock and cancel_event:
                     with _ACTIVE_LOCK:
                         _ACTIVE_SOCKETS[id(cancel_event)] = sock
                 pieces = []
@@ -85,8 +114,9 @@ def request_json(config, suffix, body=None, timeout=240, cancel_event=None):
                     finish_reason = None
                     reasoning_chars = 0
                     stream_error = False
+                    usage = None
                     for line in response:
-                        if cancel_event.is_set():
+                        if cancel_event and cancel_event.is_set():
                             raise GenerationCancelled()
                         if not line.startswith(b'data:'):
                             continue
@@ -95,6 +125,8 @@ def request_json(config, suffix, body=None, timeout=240, cancel_event=None):
                             break
                         try:
                             event = json.loads(item)
+                            if isinstance(event.get('usage'), dict):
+                                usage = event['usage']
                             if event.get('error'):
                                 stream_error = True
                                 continue
@@ -115,16 +147,26 @@ def request_json(config, suffix, body=None, timeout=240, cancel_event=None):
                             continue
                     raw = json.dumps({'choices': [{'finish_reason': finish_reason,
                         'message': {'content': ''.join(pieces)}}],
-                        '_stream_meta': {'reasoning_chars': reasoning_chars, 'provider_error': stream_error}}).encode()
+                        'usage': usage, '_stream_meta': {'reasoning_chars': reasoning_chars, 'provider_error': stream_error}}).encode()
                 else:
                     raw = response.read(8_000_001)
-                if cancel_event.is_set():
+                if cancel_event and cancel_event.is_set():
                     raise GenerationCancelled()
             else:
                 raw = response.read(8_000_001)
+        if expired.is_set():
+            raise ModelDeadlineExceeded('本次模型调用超过总时限，已停止；已完成小节保留，请缩小任务后继续')
         if len(raw) > 8_000_000:
             raise ValueError('模型响应过大')
-        return json.loads(raw)
+        decoded = json.loads(raw)
+        stats = CALL_STATS.get()
+        if stats is not None and isinstance(decoded, dict):
+            usage = decoded.get('usage') or {}
+            choices = decoded.get('choices') or [{}]
+            stats.append({'finish_reason': choices[0].get('finish_reason'),
+                          **{k: usage.get(k) if isinstance(usage.get(k), int) else None
+                             for k in ('prompt_tokens', 'completion_tokens', 'total_tokens')}})
+        return decoded
     except GenerationCancelled:
         raise
     except urllib.error.HTTPError as exc:
@@ -140,10 +182,14 @@ def request_json(config, suffix, body=None, timeout=240, cancel_event=None):
             raise GenerationCancelled() from None
         raise ValueError('模型服务没有返回有效 JSON') from None
     except Exception:
+        if expired.is_set():
+            raise ModelDeadlineExceeded('本次模型调用超过总时限，已停止；已完成小节保留') from None
         if cancel_event and cancel_event.is_set():
             raise GenerationCancelled() from None
         raise
     finally:
+        if watchdog:
+            watchdog.cancel()
         if cancel_event:
             with _ACTIVE_LOCK:
                 _ACTIVE_SOCKETS.pop(id(cancel_event), None)
@@ -154,18 +200,45 @@ def list_models(config):
     return sorted({str(row['id']) for row in result.get('data', []) if isinstance(row, dict) and row.get('id')})
 
 
-def complete_json(system, payload, config=None, max_tokens=8000, cancel_event=None):
+def complete_json(system, payload, config=None, max_tokens=8000, cancel_event=None, response_schema=None):
     config = validate_config(environment_config() if config is None else config)
     body = {'model': config['model'], 'messages': [{'role': 'system', 'content': system},
             {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}], 'stream': cancel_event is not None, 'max_tokens': max_tokens}
     if config.get('json_mode', True):
         body['response_format'] = {'type': 'json_object'}
+    if is_local_ollama(config) and config.get('json_mode', True) and payload.get('target_subsections'):
+        from .output_schema import report_unit_schema
+        body['response_format'] = {'type': 'json_schema', 'json_schema': {
+            'name': 'report_unit', 'strict': True,
+            'schema': report_unit_schema(payload['target_subsections'], payload.get('evidence', []))}}
+    if is_local_ollama(config) and response_schema is not None:
+        body['response_format'] = {'type': 'json_schema', 'json_schema': {'name': 'task_result', 'strict': True, 'schema': response_schema}}
+    if is_local_ollama(config) and body['stream']:
+        body['stream_options'] = {'include_usage': True}
     # MiniMax M3.1 Flash on OpenRouter spends from max_tokens on hidden reasoning.
     # A per-request reasoning cap leaves most of the chapter budget for visible JSON.
     host = urllib.parse.urlsplit(config['base_url']).hostname or ''
+    # Qwen 3.5's default thinking can consume the entire JSON output budget on small local machines.
+    # Limit this provider-specific setting to local Ollama Qwen 3.5; other models stay unchanged.
+    if config.get('provider') == 'ollama' and host in {'localhost', '127.0.0.1', '::1'} and config['model'].lower().startswith('qwen3.5:'):
+        body['reasoning_effort'] = 'none'
+    if host == 'api.deepseek.com' and config['model'].lower() in {'deepseek-flash', 'deepseek-v4-pro'}:
+        if payload.get('target_subsections') or payload.get('task_type') == 'evidence_review':
+            # Bounded writing/review tasks reserve the budget for visible JSON.
+            body['thinking'] = {'type': 'disabled'}
+        else:
+            body['reasoning_effort'] = 'low'
     if host == 'openrouter.ai' and config['model'].lower().startswith('minimax/minimax-m3.1-flash'):
         body['reasoning'] = {'max_tokens': 1200, 'exclude': True}
     result = request_json(config, '/chat/completions', body, cancel_event=cancel_event)
+    # DeepSeek thinking may exhaust the output budget before returning JSON.
+    # Retry once without thinking only when the provider explicitly reports truncation.
+    if (host == 'api.deepseek.com' and config['model'].lower() == 'deepseek-flash'
+            and body.get('thinking', {}).get('type') != 'disabled'
+            and result.get('choices') and result['choices'][0].get('finish_reason') == 'length'):
+        body.pop('reasoning_effort', None)
+        body['thinking'] = {'type': 'disabled'}
+        result = request_json(config, '/chat/completions', body, cancel_event=cancel_event)
     try:
         if result.get('_stream_meta', {}).get('provider_error'):
             raise ValueError('模型服务在流式输出中返回错误，请稍后重试或切换模型')

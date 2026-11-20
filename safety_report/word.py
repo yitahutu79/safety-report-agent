@@ -65,7 +65,24 @@ def write_docx(report, profile, path, figures=()):
         parts.append(paragraph('本报告采用待双方确认的试用章节结构，须由专业人员核对目录、内容及适用要求。', 'Subtitle'))
     parts.append(paragraph('目录', 'TOCHeading'))
     parts.append('<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \\o "1-3" \\h \\z \\u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>请在 Word 中更新目录</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>')
+    from .pipeline import section_identity
+    relationships = [f'<Relationship Id="rStyles" Type="{R}/styles" Target="styles.xml"/>', f'<Relationship Id="rSettings" Type="{R}/settings" Target="settings.xml"/>']
+    image_files = []
+    rendered_figures = []
+    for index, figure in enumerate(figures, 1):
+        data = Path(figure['path']).read_bytes()
+        if data[:8] != b'\x89PNG\r\n\x1a\n':
+            continue
+        width, height = struct.unpack('>II', data[16:24])
+        rid = f'rImage{index}'
+        image_files.append((f'word/media/image{index}.png', data))
+        relationships.append(f'<Relationship Id="{rid}" Type="{R}/image" Target="media/image{index}.png"/>')
+        image_parts = [paragraph(figure['caption'], 'Caption'), image_paragraph(rid, index, width, height)]
+        if figure.get('source'):
+            image_parts.append(paragraph(figure['source'], 'Evidence'))
+        rendered_figures.append((figure.get('placement') or {}, image_parts))
     for section in report['sections']:
+        section_id = section_identity(section)
         parts.append(paragraph(section['title'], 'Heading1'))
         if section.get('generation_status') == 'not_generated':
             parts.append(paragraph('本章尚未生成。请在工作台按章补写后，再导出完整报告。'))
@@ -93,28 +110,24 @@ def write_docx(report, profile, path, figures=()):
                     continue
                 if kind == 'paragraph':
                     parts.append(paragraph(item['text']))
+                    position = next((i for i, p in enumerate(section.get('paragraphs', [])) if p is item), None)
+                    for location, image_parts in rendered_figures:
+                        if location.get('section_id') == section_id and location.get('paragraph_index') is not None and location.get('paragraph_index') == position:
+                            parts.extend(image_parts)
                 else:
                     parts.append(paragraph(item['caption'], 'Caption'))
                     parts.append(table(item['headers'], item['rows']))
         if not all_items:
             parts.append(paragraph('本章尚待补充项目资料。'))
+        for location, image_parts in rendered_figures:
+            if location.get('section_id') == section_id and location.get('paragraph_index') is None:
+                parts.extend(image_parts)
     # 缺失项、审阅意见和证据追溯在独立 review.html / JSON 中呈现，不穿插正文。
-    relationships = [f'<Relationship Id="rStyles" Type="{R}/styles" Target="styles.xml"/>', f'<Relationship Id="rSettings" Type="{R}/settings" Target="settings.xml"/>']
-    image_files = []
-    if figures:
+    appendix_figures = [image_parts for location, image_parts in rendered_figures if not location.get('section_id')]
+    if appendix_figures:
         parts.append(paragraph('项目图件', 'Heading1'))
-    for index, figure in enumerate(figures, 1):
-        image_path = Path(figure['path'])
-        data = image_path.read_bytes()
-        if data[:8] != b'\x89PNG\r\n\x1a\n':
-            continue
-        width, height = struct.unpack('>II', data[16:24])
-        rid = f'rImage{index}'
-        image_files.append((f'word/media/image{index}.png', data))
-        relationships.append(f'<Relationship Id="{rid}" Type="{R}/image" Target="media/image{index}.png"/>')
-        parts += [paragraph(figure['caption'], 'Caption'), image_paragraph(rid, index, width, height)]
-        if figure.get('source'):
-            parts.append(paragraph(figure['source'], 'Evidence'))
+        for image_parts in appendix_figures:
+            parts.extend(image_parts)
     first_section = (profile.get('sections') or [{}])[0]
     size = first_section.get('pgSz', {'w': '11905', 'h': '16838'})
     margins = first_section.get('pgMar', {'top': '1417', 'right': '1134', 'bottom': '1134', 'left': '1587'})

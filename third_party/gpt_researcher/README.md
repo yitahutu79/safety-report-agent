@@ -15,3 +15,13 @@
 ## 固定提交完整 GitHub 源码
 
 来源：https://github.com/assafelovic/gpt-researcher ，提交 `5cdad9cb434754188b78bd998df18dd8d502cf7e`。GitHub 源码压缩包 SHA-256 `193a3c169d6021712e95888b2efa30daad1e6181f55e25794284e1a1fdfa488b`。`gpt-researcher-source-5cdad9cb.tar.gz` 是该提交的完整归档，包括前后端、示例和测试资料，可按需解压查阅；此源码不表示已安装或启用所有组件。该源码与 PyPI wheel 是各自独立的固定版本，不能假定二者相同。
+
+## 2026-11-18 已写小节检索适配
+
+`safety_report/gptr_bm25.py::rank_written_sections` 根据 wheel 中 `gpt_researcher/context/lexical.py::rank_written_sections` 改造：保留上游分块、BM25 相对得分筛选思路，分词改为本项目中文分词，并缩短输出；其结果仅供行文衔接，不能作为项目事实依据。长报告按标题分组及节点持久化是本项目适配，并非直接运行上游 `DetailedReport`。
+
+## 2026-11-20 原版写作对照
+
+已在隔离的 `.venv-researcher` 安装 PyPI `gpt-researcher==0.17.0`，实际调用原版 `actions.report_generation.generate_report` 和默认 PromptFamily，未修改其正文生成逻辑。工作台仍使用原 `.venv`。对照使用相同 DeepSeek Pro 和固定真实证据，不运行上游联网研究、解析、MCP 或完整 DetailedReport。原始输入、输出及指标在 `outputs/researcher同输入对照-2026-11-19/`；目录日期保留为实验启动日期。
+
+对照显示结构表达值得参考，但默认提示中的延长篇幅、生成参考链接等行为需要适配：原始概况输出出现 example.com 虚构引用。未将该输出直接导入项目报告，也未宣称整套上游已接入生产。

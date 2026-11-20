@@ -47,7 +47,7 @@ class ChapterAgentGraphTests(unittest.TestCase):
         self.assertIn('工艺流程图', searched)
         self.assertEqual(result['paragraphs'][0]['evidence_ids'], ['e-flow'])
         self.assertEqual([row['agent'] for row in result['agent_trace']],
-                         ['资料规划 Agent', '证据检索工具', '资料筛选 Agent', '报告撰写 Agent', '质量审核 Agent', '证据审稿 Agent'])
+                         ['资料规划 Agent', '证据检索工具', '资料筛选 Agent', '报告撰写 Agent', '质量审核 Agent', '证据审稿 Agent', '运行统计'])
 
     def test_quality_gate_routes_one_targeted_repair(self):
         writes = []
@@ -89,7 +89,9 @@ class ChapterAgentGraphTests(unittest.TestCase):
                 return {'sources': [{'id': item['id'], 'decision': 'use', 'reason': '与章节相关'} for item in payload['sources']]}
             if '安全生产报告的审稿人员' in system:
                 calls.append(payload)
-                return {'issues': ['没有证据证明已安装报警装置'] if len(calls) == 1 else []}
+                return {'issues': [dict(target_id='p:0',draft_quote='储罐已安装报警装置。',evidence_id='e1',evidence_quote='工艺资料仅说明有储罐。',category='unsupported',expected_text='',reason='报警装置安装状态无支持',suggestion='移除已安装断言')] if len(calls) == 1 else []}
+            if '审稿意见复核员' in system:
+                return {'decisions':[{'id':'f0','decision':'confirm','reason':'来源只说明储罐，不支持报警装置已安装'}]}
             if '审核 Agent 指出的质量问题' in system:
                 return {'paragraphs': [{'text':'资料载明设置储罐。','evidence_ids':['e1']}], 'tables': [], 'missing':['报警设施情况待补充'], 'review': []}
             return {'paragraphs': [{'text':'储罐已安装报警装置。','evidence_ids':['e1']}], 'tables': [], 'missing': [], 'review': []}
