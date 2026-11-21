@@ -198,6 +198,56 @@ class HTTPTests(unittest.TestCase):
             self.assertEqual((target / 'report.docx').read_bytes(), b'old')
             self.assertTrue(server.load(target / 'state.json')['report_outdated'])
 
+    def test_batch_remove_uploads_preserves_other_files_and_report(self):
+        _, project = self.request('/api/projects', {'name': '批量删除资料'})
+        route = f'/api/projects/{project["id"]}'
+        target = server.directory(project['id'])
+        original = '建设单位：删除测试公司'.encode()
+        _, source = self.request(route + '/upload?name=old.txt', raw=original)
+        _, keep = self.request(route + '/upload?name=keep.txt', raw='项目名称：保留测试项目'.encode())
+        _, reference = self.request(route + '/upload?name=reference.txt&role=reference', raw=b'reference')
+        server.analyze_project(target)
+        _, before = self.request(route)
+        self.request(route + '/facts', {'fields': [{**f, 'confirmed': bool(f['value'])} for f in before['fields']]})
+        (target / 'report.docx').write_bytes(b'older report')
+        _, removed = self.request(route + '/delete-files', {'ids': [source['file_id'], reference['file_id']]})
+        self.assertEqual(removed['removed'], 2)
+
+        _, result = self.request(route)
+        self.assertEqual([f['id'] for f in result['files']], [keep['file_id']])
+        self.assertNotIn('_archived_uploads', result)
+        self.assertFalse(result['evidence'])
+        self.assertTrue(result['analysis_dirty'])
+        self.assertTrue(result['report_outdated'])
+        fields = {f['key']: f for f in result['fields']}
+        self.assertFalse(fields['company']['confirmed'])
+        self.assertFalse(fields['company']['candidates'])
+        self.assertTrue(fields['project']['confirmed'])
+        self.assertEqual((target / 'report.docx').read_bytes(), b'older report')
+        archive = server.load(target / 'state.json')['_archived_uploads']
+        self.assertEqual((target / 'uploads' / archive[0]['stored']).read_bytes(), original)
+        with self.assertRaises(urllib.error.HTTPError):
+            self.request(route + '/files/' + source['file_id'] + '/download')
+
+        _, replacement = self.request(route + '/upload?name=replacement.txt', raw=original)
+        server.analyze_project(target)
+        _, refreshed = self.request(route)
+        self.assertEqual({f['id'] for f in refreshed['files']}, {keep['file_id'], replacement['file_id']})
+        self.assertEqual({c['source'] for c in refreshed['evidence']}, {'keep.txt', 'replacement.txt'})
+        self.assertFalse(refreshed['analysis_dirty'])
+
+    def test_remove_uploads_rejects_invalid_batch_without_changes(self):
+        _, project = self.request('/api/projects', {'name': '删除约束'})
+        route = f'/api/projects/{project["id"]}'
+        _, added = self.request(route + '/upload?name=kept.txt', raw=b'kept')
+        target = server.directory(project['id'])
+        with self.assertRaises(urllib.error.HTTPError):
+            self.request(route + '/delete-files', {'ids': [added['file_id'], '0' * 16]})
+        server.state_update(target, busy=True)
+        with self.assertRaises(urllib.error.HTTPError):
+            self.request(route + '/delete-files', {'ids': [added['file_id']]})
+        self.assertEqual([f['id'] for f in server.load(target / 'state.json')['files']], [added['file_id']])
+
     def test_download_allowlist_blocks_project_internal_files(self):
         with patch.dict(os.environ, {'APP_PASSWORD': ''}):
             _, project = self.request('/api/projects', {'name': '内部文件'})

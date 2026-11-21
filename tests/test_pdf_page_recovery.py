@@ -27,7 +27,7 @@ def test_pdf_failed_page_does_not_discard_other_pages(tmp_path):
 def test_ocr_reprocesses_cached_scan_and_recovers_candidate_fields(tmp_path):
     path = tmp_path / '备案.pdf'
     path.write_bytes(b'fixture')
-    old_document = {'sha256': hashlib.sha256(path.read_bytes()).hexdigest(), 'chunks': []}
+    old_document = {'sha256': hashlib.sha256(path.read_bytes()).hexdigest(), 'file': path.name, 'chunks': []}
     reader = Mock()
     reader.pages = [Mock(extract_text=lambda: ''), Mock(extract_text=lambda: '可直接提取的项目说明' * 5)]
     recognized = '山东省建设项目备案证明\n单位名称\n测试工程有限公司\n项目名称\n先进制造产业园一期建设项目'

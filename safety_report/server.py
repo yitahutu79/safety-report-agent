@@ -124,9 +124,56 @@ def invalidate(target):
     state_update(target, report_outdated=True)
 
 
+def is_text_source(file):
+    return (file.get('active', True) and file['role'] not in {'reference', 'attachment'}
+            and Path(file['name']).suffix.lower() in assets.TEXT)
+
+
+def remove_uploads(target, state, ids):
+    if not isinstance(ids, list) or not 1 <= len(ids) <= 100 or any(
+        not isinstance(file_id, str) or not re.fullmatch(r'[a-f0-9]{16}', file_id) for file_id in ids
+    ):
+        raise ValueError('请选择要删除的项目文件')
+    requested = set(ids)
+    removed = [file for file in state['files'] if file['id'] in requested]
+    if len(removed) != len(requested):
+        raise ValueError('部分文件已不存在，请刷新列表后重新选择')
+    remaining = [file for file in state['files'] if file['id'] not in requested]
+    reread = state['analysis_dirty'] or any(is_text_source(file) for file in removed)
+    message = f'已删除 {len(removed)} 份资料'
+    changes = {}
+    if reread:
+        names = {name for file in removed for name in (file['name'], file['stored'])}
+        for field in state['fields']:
+            previous = field.get('candidates', [])
+            kept = [candidate for candidate in previous if candidate.get('source') not in names]
+            value = field.get('value')
+            lost_source = (value and not field.get('manual')
+                           and any(candidate.get('value') == value for candidate in previous)
+                           and not any(candidate.get('value') == value for candidate in kept))
+            field.update(candidates=kept, conflict=len({candidate['value'] for candidate in kept}) > 1)
+            if lost_source:
+                field.update(confirmed=False, changed=True)
+        changes.update(fields=state['fields'], analysis_dirty=True, uploads_need_reread=True,
+                       chunk_count=0, warnings=[], preflight_result=None, qa_result=None)
+        if any(is_text_source(file) for file in remaining):
+            message += '，请重新读取剩余资料'
+        else:
+            message += '，请上传可读取的项目资料'
+    # Remove membership and save recovery metadata in one atomic state write.
+    # The archived copies remain local but cannot be opened via upload routes.
+    archived = state.get('_archived_uploads', []) + [
+        {**file, 'deleted_at': time.time()} for file in removed
+    ]
+    state_update(target, files=remaining, _archived_uploads=archived,
+                 data_revision=state['data_revision'] + 1, source_changes_pending=state['source_changes_pending'] or reread,
+                 report_outdated=True, message=message, **changes)
+    return {'ok': True, 'removed': len(removed), 'message': message}
+
+
 def analyze_project(target, model=None):
     state = upgrade_state(load(target / 'state.json'))
-    source_files = [f for f in state['files'] if f.get('active', True) and f['role'] not in {'reference', 'attachment'} and Path(f['name']).suffix.lower() in assets.TEXT]
+    source_files = [f for f in state['files'] if is_text_source(f)]
     previous = load(target / 'analysis.json', {})
     labels = {f['stored']: f['name'] for f in state['files']}
     metadata = {f['stored']: {'document_type': f.get('document_type', 'other'),
@@ -183,7 +230,7 @@ def analyze_project(target, model=None):
     with LOCK:
         save(target / 'analysis.json', result)
         state_update(target, fields=result['fields'], files=state['files'], warnings=result['warnings'],
-                     chunk_count=len(result['chunks']), analysis_dirty=False, stage='review')
+                     chunk_count=len(result['chunks']), analysis_dirty=False, uploads_need_reread=False, stage='review')
     return result
 
 
@@ -202,11 +249,13 @@ def export_report(target, report, output, files):
 
 
 def chapter_materials_plan(target, chapter_id, model, cancel_event=None):
+    state = upgrade_state(load(target / 'state.json'))
+    if state.get('uploads_need_reread'):
+        raise ValueError('项目资料已删除，请先重新读取剩余资料')
     report = versions.load_report(target)
     section = next((item for item in (report or {}).get('sections', [])
                     if (item.get('id') or (re.match(r'\d+', item.get('title', '')).group() if re.match(r'\d+', item.get('title', '')) else '')) == chapter_id), None)
     if not section:
-        state = upgrade_state(load(target / 'state.json'))
         profile = report_profile(state['report_type'], load(PROFILE))
         heading = next((h for h in profile['headings'] if h['level'] == 1 and re.match(r'\d+', h['text']).group() == chapter_id), None)
         if not heading:
@@ -219,7 +268,6 @@ def chapter_materials_plan(target, chapter_id, model, cancel_event=None):
     query = ' '.join([section['title']] + section.get('subheadings', []) +
                      section.get('missing', [])[:12] + section.get('review', [])[:8])
     selected = [item for item in chunks if item.get('id') in used_ids] + retrieve(chunks, query, limit=16)
-    state = upgrade_state(load(target / 'state.json'))
     professional = ProfessionalLedger(target / 'professional.json', state['report_type']).report_evidence()
     relevant = [item for item in professional if item.get('report_section') == chapter_id]
     evidence = list({item['id']: item for item in relevant + selected}.values())[:16]
@@ -475,10 +523,14 @@ class Handler(BaseHTTPRequestHandler):
                 trash = DATA / '.trash'
                 with LOCK:
                     projects = [load(p) for p in trash.glob('*/state.json')]
+                    for project in projects:
+                        project.pop('_archived_uploads', None)
                 return self.json(sorted(projects, key=lambda p: p.get('updated_at', 0), reverse=True))
             if path == '/api/projects':
                 with LOCK:
                     projects = [load(p) for p in DATA.glob('*/state.json')]
+                    for project in projects:
+                        project.pop('_archived_uploads', None)
                 return self.json(sorted(projects, key=lambda p: p['updated_at'], reverse=True))
             match = re.fullmatch(r'/api/projects/([a-f0-9]{24})(?:/(.*))?', path)
             if not match:
@@ -527,7 +579,8 @@ class Handler(BaseHTTPRequestHandler):
             if not action:
                 with LOCK:
                     result = upgrade_state(load(target / 'state.json'))
-                    analysis = load(target / 'analysis.json', {})
+                    result.pop('_archived_uploads', None)
+                    analysis = {} if result.get('uploads_need_reread') else load(target / 'analysis.json', {})
                     result['evidence'] = analysis.get('chunks', [])[:25]
                     result['downloads'] = [n for n in sorted(DOWNLOADS) if (target / n).exists()]
                     result['versions'] = versions.history(target)
@@ -648,7 +701,7 @@ class Handler(BaseHTTPRequestHandler):
                         with LOCK:
                             shutil.move(str(trash), str(target))
                     return self.json({'ok': True})
-            match = re.fullmatch(r'/api/projects/([a-f0-9]{24})/(upload|analyze|facts|generate|preflight|materials-plan|cancel|ack-error|clear-node-progress|flow|geocode|map|files|edit|restore|measures|calculations|professional|rag-test|knowledge-qa)', path)
+            match = re.fullmatch(r'/api/projects/([a-f0-9]{24})/(upload|analyze|facts|generate|preflight|materials-plan|cancel|ack-error|clear-node-progress|flow|geocode|map|files|delete-files|edit|restore|measures|calculations|professional|rag-test|knowledge-qa)', path)
             if not match:
                 return self.json({'error': '接口不存在'}, 404)
             target, action = directory(match[1]), match[2]
@@ -727,6 +780,8 @@ class Handler(BaseHTTPRequestHandler):
                     data = self.input_json()
                     ledger = MeasuresLedger(target / 'measures.json')
                     if data.get('operation') == 'extract':
+                        if state.get('uploads_need_reread'):
+                            raise ValueError('项目资料已删除，请先重新读取剩余资料')
                         model = settings.resolve(DATA, data.get('model_id'))
                         analysis = load(target / 'analysis.json', {})
                         chunks = [c for c in analysis.get('chunks', []) if c.get('document_type') == 'safety_analysis']
@@ -755,7 +810,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json({'item': ledger.save(data, ident or None)})
                 if action == 'calculations':
                     data = self.input_json()
-                    analysis = load(target / 'analysis.json', {})
+                    analysis = {} if state.get('uploads_need_reread') else load(target / 'analysis.json', {})
                     ledger = CalculationLedger(target / 'calculations.json')
                     if data.get('operation') == 'compare_distance':
                         name = str(data.get('name', '')).strip()
@@ -866,6 +921,8 @@ class Handler(BaseHTTPRequestHandler):
                         data_revision=state['data_revision'] + 1, message='已补充资料；已有信息和草稿均保留')
                     return self.json({'ok': True, 'file_id': ident, 'message': '资料已接收'})
                 data = self.input_json()
+                if action == 'delete-files':
+                    return self.json(remove_uploads(target, state, data.get('ids')))
                 if action == 'clear-node-progress':
                     (target / 'node-checkpoints.json').unlink(missing_ok=True)
                     (target / 'preflight-checkpoints.json').unlink(missing_ok=True)

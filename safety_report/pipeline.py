@@ -68,14 +68,14 @@ def section_identity(section):
 
 def analyze(paths, previous=None, on_file=lambda index, total, name: None):
     documents, chunks, warnings = [], [], []
-    cache = {d.get('sha256'): d for d in (previous or {}).get('documents', [])}
+    cache = {(d.get('sha256'), d.get('file')): d for d in (previous or {}).get('documents', [])}
     reused = 0
     import hashlib
     for index, path in enumerate(paths, 1):
         on_file(index, len(paths), path.name)
         try:
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
-            document = cache.get(digest)
+            document = cache.get((digest, path.name))
             if document is not None and path.suffix.lower() == '.pdf' and (
                 document.get('pdf_parser_revision') != PDF_PARSER_REVISION or document.get('ocr_retry')
             ):
