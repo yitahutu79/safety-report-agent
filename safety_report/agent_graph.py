@@ -9,6 +9,7 @@ import json
 import re
 import time
 import logging
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 
@@ -110,6 +111,33 @@ def budget_groups(headings, evidence, local):
         if current:
             groups.append(current)
     return groups
+
+
+def _subsection_heading_key(heading):
+    if not isinstance(heading, str):
+        return None
+    text = unicodedata.normalize('NFKC', heading)
+    number = re.match(r'^\s*([0-9]+(?:\s*\.\s*[0-9]+)+)', text)
+    if not number:
+        return None
+    number_key = re.sub(r'\s+', '', number.group(1))
+    title_key = re.sub(r'[\s.。,、:;()\[\]【】]+', '', text[number.end():])
+    return (number_key, title_key) if title_key else None
+
+
+def _canonicalize_unit_headings(items, group, chapter_headings):
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        heading = item.get('heading')
+        if heading in group:
+            continue
+        key = _subsection_heading_key(heading)
+        matches = [candidate for candidate in dict.fromkeys(h for h in chapter_headings if isinstance(h, str))
+                   if key and _subsection_heading_key(candidate) == key]
+        if len(matches) != 1 or matches[0] not in group:
+            raise ValueError('返回了范围外的标题')
+        item['heading'] = matches[0]
 
 
 def merge_subsection_drafts(drafts):
@@ -336,6 +364,7 @@ def run_chapter_graph(system: str, payload: dict[str, Any], model: dict[str, Any
                         retry_prompt += ('\n上一次小节输出未通过检查：' + issue +
                                          '。请仅重写本小节并返回完整结构；四个数组 paragraphs、tables、missing、review 必须全部给出，'
                                          '无内容时使用空数组。不得虚构证据或遗漏必要限制。')
+                        retry_prompt += '\n允许的 heading 原样标题：' + '；'.join(group)
                     try:
                         unit = state['complete'](retry_prompt, payload, state['model'], max_tokens=(2000 if len(group) == 1 else 3000) if local else 4000, cancel_event=state.get('cancel_event'))
                         unit = normalize_local_review_lists(unit, state['model'])
@@ -343,9 +372,7 @@ def run_chapter_graph(system: str, payload: dict[str, Any], model: dict[str, Any
                             raise ValueError('未返回有效正文对象')
                         # Every unit must pass existing citation and quality checks before persistence.
                         items = unit.get('paragraphs', []) + unit.get('tables', [])
-                        for item in items:
-                            if isinstance(item, dict) and item.get('heading') not in group:
-                                raise ValueError('返回了范围外的标题')
+                        _canonicalize_unit_headings(items, group, headings)
                         allowed_ids = {item['id'] for item in unit_evidence}
                         for item in items:
                             if isinstance(item, dict) and any(eid not in allowed_ids for eid in item.get('evidence_ids', [])):

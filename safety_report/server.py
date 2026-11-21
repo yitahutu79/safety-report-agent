@@ -148,7 +148,24 @@ def analyze_project(target, model=None):
         for candidate in field['candidates']:
             candidate['source'] = labels.get(candidate['source'], candidate['source'])
     result['warnings'] = [next((message.replace(stored, name, 1) for stored, name in labels.items() if message.startswith(stored)), message) for message in result['warnings']]
+    documents = {document['file']: document for document in result['documents']}
+    for file in state['files']:
+        document = documents.get(file['stored'])
+        if document is not None:
+            if not document['chunks']:
+                file['read_status'] = '未提取到文字，请查看提示'
+            elif document.get('low_text_pages'):
+                file['read_status'] = '有页面文字不足，请查看提示'
+            elif document.get('ocr_pages'):
+                file['read_status'] = '已 OCR，待核对'
+            else:
+                file['read_status'] = '已读取'
+        elif Path(file['name']).suffix.lower() in assets.TEXT and file['role'] == 'source':
+            file['read_status'] = '未读取，请查看提示'
+        else:
+            file['read_status'] = file['status']
     if not result['chunks']:
+        state_update(target, files=state['files'], warnings=result['warnings'])
         raise ValueError('没有提取出可用文本。图片/CAD 可在图件区管理；编写正文还需要可读取的项目说明等资料')
     if model:
         try:
@@ -163,14 +180,6 @@ def analyze_project(target, model=None):
         semantic_index.client.close()
     else:
         result['warnings'].append('语义索引未就绪，生成时将使用关键词检索：' + (semantic_index.semantic_error or '索引未配置'))
-    file_results = {d['sha256']: {'parsed': True, 'blocks': len(d['blocks'])} for d in result['documents']}
-    for file in state['files']:
-        if file['sha256'] in file_results:
-            file['read_status'] = '已读取'
-        elif Path(file['name']).suffix.lower() in assets.TEXT and file['role'] == 'source':
-            file['read_status'] = '未读取，请查看提示'
-        else:
-            file['read_status'] = file['status']
     with LOCK:
         save(target / 'analysis.json', result)
         state_update(target, fields=result['fields'], files=state['files'], warnings=result['warnings'],
@@ -444,6 +453,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json({'model_ready': bool(config['models']), 'model': '',
                     'map_ready': bool(os.environ.get('AMAP_WEB_KEY')), 'pdf_ready': bool(importlib.util.find_spec('pypdf')),
                     'image_ready': bool(importlib.util.find_spec('PIL')), 'pdf_render_ready': bool(importlib.util.find_spec('pypdfium2')),
+                    'ocr_ready': all(importlib.util.find_spec(name) for name in ('rapidocr', 'onnxruntime', 'pypdfium2')),
                     'template': {key: load(PROFILE)[key] for key in ('table_count', 'image_resources')}, 'version': '0.9.0'})
             if path == '/api/template':
                 profile = report_profile(query.get('report_type', [DEFAULT_TYPE])[0], load(PROFILE))

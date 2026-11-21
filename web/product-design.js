@@ -15,7 +15,8 @@ hero.append(heroVisual);
 const progressHeading=el('div',undefined,'overview-heading');progressHeading.innerHTML='<div><span class="overline">YOUR WORKFLOW</span><h2>项目编制流程</h2><p>从基础资料到报告草稿，按步骤推进。</p></div><span class="overview-hint">点击卡片快速前往 <b>↗</b></span>';
 $('#workflow-summary').before(progressHeading);
 const materialPanel=$('#view-materials');
-const materialCards={overview:[$('#upload-title').closest('section'),$('#facts-card')],upload:[$('#upload-title').closest('section')],facts:[$('#facts-card')],figure:[$('#figure-card')],professional:[$('#professional-card')],measures:[$('#measures-card')],calculations:[$('#calculations-card')]};
+const uploadAndFacts=[$('#upload-title').closest('section'),$('#facts-card')];
+const materialCards={overview:uploadAndFacts,upload:uploadAndFacts,facts:[$('#facts-card')],figure:[$('#figure-card')],professional:[$('#professional-card')],measures:[$('#measures-card')],calculations:[$('#calculations-card')]};
 function setMaterialFocus(focus){
   const visible=materialCards[focus]||materialCards.overview;
   for(const cards of Object.values(materialCards))for(const card of cards)if(card)card.classList.toggle('material-focused-hidden',!visible.includes(card));

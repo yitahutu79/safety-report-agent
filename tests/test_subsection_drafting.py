@@ -50,3 +50,47 @@ def test_subsection_rejects_unknown_evidence_and_never_persists_invalid_output(t
         run_chapter_graph('写作',{'chapter':'2 概况','required_subsections':['2.1 通风','2.2 工艺'],'evidence':evidence},{},search=lambda q:[],validate=lambda d:[],complete=complete,checkpoint=NodeCheckpoint(path,{}))
     assert calls==['draft','draft']
     assert '不应保存' not in path.read_text()
+
+
+@pytest.mark.parametrize(('returned_heading', 'allowed'), [
+    ('１．５ 项目的其他相关文件：', True),
+    ('1.1 建设项目的批复（核准、备案）文件', False),
+    ('1.51 项目的其他相关文件', False),
+    ('1.5 设计依据', False),
+])
+def test_subsection_matches_only_cosmetic_heading_variants(returned_heading, allowed):
+    filing = '1.1建设项目的批复（核准、备案）文件'
+    other = '1.5项目的其他相关文件'
+    evidence = [{'id': 'e1', 'source': '模拟文件', 'locator': '1', 'text': '项目技术资料'}]
+    drafts = []
+    checked_headings = []
+
+    def complete(system, payload, model, **kwargs):
+        if '资料规划 Agent' in system:
+            return {'queries': []}
+        if '资料筛选 Agent' in system:
+            return {'sources': [{'id': 'e1', 'decision': 'use', 'reason': '相关'}]}
+        if '安全生产报告的审稿人员' in system:
+            return {'issues': []}
+        target = payload['target_subsections'][0]
+        drafts.append(target)
+        heading = returned_heading if target == other else '1.1 建设项目的批复(核准,备案)文件'
+        paragraph = {'heading': heading, 'text': '相关资料见原件。', 'evidence_ids': ['e1']}
+        return {'paragraphs': [paragraph], 'tables': [dict(paragraph)], 'missing': [], 'review': []}
+
+    def validate(draft):
+        checked_headings.extend(item['heading'] for item in draft['paragraphs'] + draft['tables'])
+        return []
+
+    args = dict(system='写作', payload={'chapter': '1 设计依据', 'required_subsections': [filing, other],
+                'evidence': evidence}, model={}, search=lambda q: [], validate=validate, complete=complete)
+    if allowed:
+        result = run_chapter_graph(**args)
+        assert [item['heading'] for item in result['paragraphs']] == [filing, other]
+        assert [item['heading'] for item in result['tables']] == [filing, other]
+        assert set(checked_headings) == {filing, other}
+        assert drafts == [filing, other]
+    else:
+        with pytest.raises(ValueError, match='返回了范围外的标题'):
+            run_chapter_graph(**args)
+        assert drafts == [filing, other, other]
