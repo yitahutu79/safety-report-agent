@@ -322,6 +322,14 @@ def run_chapter_graph(system: str, payload: dict[str, Any], model: dict[str, Any
                 candidates = list({item['id']: item for item in chapter_evidence + hits if item.get('id')}.values())
                 scores = bm25_scores(tokens(' '.join(group)), [tokens(item.get('text', '')) for item in candidates])
                 ranked = sorted(range(len(candidates)), key=lambda i: (-scores[i], i))
+                if ('设计依据' in state['payload'].get('chapter', '')
+                        and any('批复' in heading or '其他相关文件' in heading for heading in group)):
+                    first_by_source = {}
+                    for candidate_index in ranked:
+                        item = candidates[candidate_index]
+                        source_key = (item.get('source', item['id']), item.get('sha256', ''))
+                        first_by_source.setdefault(source_key, candidate_index)
+                    ranked = list(dict.fromkeys([*first_by_source.values(), *ranked]))
                 # Retain source identity and scope metadata. Project facts and general knowledge remain distinct.
                 unit_evidence = []
                 chars = 0
@@ -338,6 +346,7 @@ def run_chapter_graph(system: str, payload: dict[str, Any], model: dict[str, Any
                 prompt = state['system'] + '\n' + chapter_writing_guidance(state['payload'].get('chapter', '')) + '\n' + unit_writing_guidance(group)
                 prompt += ('\n本次只负责给定的目标小节，不写其他小节。段落和表格 heading 只能使用给定目标小节原样标题。'
                            '仅保留与目标小节相关的事实及可验证引用，补件任务写入 missing 或 review，影响判断成立的限制必须同时写入对应正文，'
+                           '没有相关依据的小节不得输出占位段落或空引用；该小节只列 missing/review，相应 paragraphs/tables 留空。'
                            '前文摘要仅供衔接，不作为事实依据。将资料取舍写入 editorial_plan，不另写重复的资料筛选报告。输出要求的完整 JSON。')
                 if attempt:
                     prompt += '\n此前整章审核提出的问题：' + '；'.join(targeted[:12]) + '。只修正本小节相关问题，保留可验证事实。'
@@ -365,6 +374,9 @@ def run_chapter_graph(system: str, payload: dict[str, Any], model: dict[str, Any
                                          '。请仅重写本小节并返回完整结构；四个数组 paragraphs、tables、missing、review 必须全部给出，'
                                          '无内容时使用空数组。不得虚构证据或遗漏必要限制。')
                         retry_prompt += '\n允许的 heading 原样标题：' + '；'.join(group)
+                        retry_prompt += ('\n本次允许引用的 evidence_ids：' + json.dumps([item['id'] for item in unit_evidence], ensure_ascii=False) +
+                                         '。只可引用能支持该条正文的来源。若这些来源均不能支持目标小节，返回 paragraphs=[]、tables=[]，'
+                                         '将具体缺失材料写入 missing，核验事项写入 review，不生成无依据的文件条目。')
                     try:
                         unit = state['complete'](retry_prompt, payload, state['model'], max_tokens=(2000 if len(group) == 1 else 3000) if local else 4000, cancel_event=state.get('cancel_event'))
                         unit = normalize_local_review_lists(unit, state['model'])

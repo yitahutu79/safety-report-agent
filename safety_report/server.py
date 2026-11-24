@@ -1081,7 +1081,7 @@ class Handler(BaseHTTPRequestHandler):
                                        '删除章节：' + '、'.join(data.get('delete_chapter_ids', [])) if data.get('delete_chapter_ids') else
                                        '页面编辑保存')
                     meta = versions.commit(target, report, export, kind=action, description=description)
-                    state_update(target, report_version=meta['id'], report_outdated=state['source_changes_pending'] or state['analysis_dirty'], message='已保存为新版本，历史版本保留', stage='done')
+                    state_update(target, report_version=meta['id'], report_outdated=state['source_changes_pending'] or state['analysis_dirty'], message='已保存为新版本，历史版本保留', stage='done', error='')
                     return self.json({'ok': True, 'version': meta['id']})
                 if action == 'flow':
                     result = draw_flow(data.get('steps'), target)

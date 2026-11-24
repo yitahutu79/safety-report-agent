@@ -15,6 +15,36 @@ def report():
         {'title':'2 项目概况','subheadings':[], 'paragraphs':[{'heading':'2 项目概况','text':'第三段内容'}], 'tables':[]}]}
 
 
+def test_design_basis_export_matches_heading_and_entry_styles(tmp_path):
+    from xml.etree import ElementTree as ET
+
+    output = tmp_path / 'basis.docx'
+    write_docx(report(), {}, output)
+    w = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+    with zipfile.ZipFile(output) as archive:
+        styles = ET.fromstring(archive.read('word/styles.xml'))
+        body = ET.fromstring(archive.read('word/document.xml'))
+    by_id = {style.get(w + 'styleId'): style for style in styles.findall(w + 'style')}
+    assert by_id['BasisHeading1'].find(f'./{w}pPr/{w}pageBreakBefore') is not None
+    heading = by_id['BasisHeading2']
+    assert heading.find(f'./{w}rPr/{w}rFonts').get(w + 'eastAsia') == '黑体'
+    assert heading.find(f'./{w}rPr/{w}sz').get(w + 'val') == '28'
+    assert heading.find(f'./{w}rPr/{w}b').get(w + 'val') == '0'
+    entry = by_id['BasisEntry']
+    assert entry.find(f'./{w}pPr/{w}jc').get(w + 'val') == 'both'
+    assert entry.find(f'./{w}pPr/{w}spacing').get(w + 'after') == '0'
+    assert entry.find(f'./{w}pPr/{w}autoSpaceDE').get(w + 'val') == '0'
+    used = {}
+    for paragraph in body.iter(w + 'p'):
+        text = ''.join(t.text or '' for t in paragraph.iter(w + 't'))
+        style = paragraph.find(f'./{w}pPr/{w}pStyle')
+        if style is not None:
+            used[text] = style.get(w + 'val')
+    assert used['1.1 范围'] == 'BasisHeading2'
+    assert used['第一段内容'] == 'BasisEntry'
+    assert used['第三段内容'] == 'Normal'
+
+
 def make(root, title, placement):
     path=root/(title+'.png'); Image.new('RGB',(40,30),'blue').save(path)
     return {'path':str(path), 'caption':title, 'source':'合成测试', 'placement':placement}

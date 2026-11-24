@@ -1,6 +1,7 @@
 'use strict';
 const $ = s => document.querySelector(s);
 let selected=null, current=null, service=null, modelSettings=null, template=null, polling=null;
+let refreshDisconnected = false;
 let factsDirty=false, editorDirty=false, report=null, loadedVersion=null, currentChapter=0, uploadBusy=false, view='materials';
 let materialsPlan=null, chapterPrompts={};
 let preflightApproved=false, preflightBusy=false;
@@ -80,7 +81,35 @@ $('#project-form').onsubmit=async e=>{e.preventDefault();try{const project=await
 $('#login-form').onsubmit=async e=>{e.preventDefault();try{await post('/api/login',{password:$('#password').value});$('#password').value='';$('#login').classList.add('hidden');await init();}catch(error){$('#login-error').textContent=error.message;}};
 async function listProjects(){const projects=await api('/api/projects');$('#projects').replaceChildren();for(const p of projects){const b=button(p.name,()=>selectProject(p.id),p.id===selected?'active':'');b.title=p.name;$('#projects').append(b);}return projects;}
 async function selectProject(id){if(id===selected)return;if(deletingFiles)throw new Error('正在删除文件，请稍候');if(preflightBusy)throw new Error('资料检查正在进行，请先停止或等待完成');if(current){if((dirtyFileForms.size||dirtyAssetForms.size)&&!confirm('资料或图件设置尚未保存，切换项目将丢失这些修改。是否继续？'))return;if(factsDirty)await saveFacts();if(editorDirty)await saveSection();}materialsPlan=null;chapterPrompts={};preflightApproved=false;dirtyFileForms.clear();dirtyAssetForms.clear();selectedFileIds.clear();$('#preflight-content').replaceChildren();const advisor=$('#materials-advisor');if(advisor){advisor.replaceChildren();advisor.classList.add('hidden');}selected=id;current=null;report=null;loadedVersion=null;factsDirty=false;editorDirty=false;currentChapter=0;clearTimeout(polling);localStorage.setItem('safety-selected',id);$('#workspace').classList.remove('hidden');$('#welcome').classList.add('hidden');$('#flow-steps').value='';$('#map-address').value='';$('#instructions').value='';$('#upload-results').replaceChildren();$('#map-candidates').replaceChildren();showView('materials');await listProjects();await refresh();}
-async function refresh(){if(!selected)return;clearTimeout(polling);try{const wasBusy=current?.busy;current=await api(`/api/projects/${selected}`);if(template?.report_type!==(current.report_type||'facility_design')){template=await api('/api/template?report_type='+encodeURIComponent(current.report_type||'facility_design'));buildChapterChecks();}render(current);if(wasBusy&&!current.busy&&!current.error)notify(current.message);if(current.has_report&&!editorDirty&&loadedVersion!==current.report_version)await loadReport();if(current.busy)polling=setTimeout(refresh,1500);}catch(error){notify(error.message);}}
+async function refresh() {
+  if (!selected) return;
+  clearTimeout(polling);
+  const projectId = selected;
+  try {
+    const wasBusy = current?.busy;
+    const project = await api(`/api/projects/${projectId}`);
+    if (selected !== projectId) return;
+    current = project;
+    refreshDisconnected = false;
+    if (template?.report_type !== (current.report_type || 'facility_design')) {
+      template = await api('/api/template?report_type=' + encodeURIComponent(current.report_type || 'facility_design'));
+      buildChapterChecks();
+    }
+    render(current);
+    if (wasBusy && !current.busy && !current.error) notify(current.message);
+    if (current.has_report && !editorDirty && loadedVersion !== current.report_version) await loadReport();
+    if (current.busy) polling = setTimeout(refresh, 1500);
+  } catch (error) {
+    if (selected !== projectId) return;
+    if (error instanceof TypeError) {
+      if (!refreshDisconnected) notify('暂时无法连接工作台，正在自动重连。已上传资料和已保存草稿仍保存在本机。');
+      refreshDisconnected = true;
+      polling = setTimeout(refresh, 5000);
+    } else {
+      notify(error.message);
+    }
+  }
+}
 function prepareChapterScope(project){const scope=$('#generation-scope');scope.querySelector('[value=selected]').disabled=false;if(scope.dataset.projectId===project.id)return;scope.dataset.projectId=project.id;scope.value='selected';const boxes=[...$('#chapter-checks').querySelectorAll('input[type=checkbox]')];boxes.forEach((box,index)=>box.checked=!project.has_report&&index===0);$('#chapter-checks').classList.toggle('hidden',false);}
 function renderWorkflowSummary(project){
  const active=project.files.filter(file=>file.active!==false).length;

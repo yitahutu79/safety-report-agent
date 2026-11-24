@@ -37,6 +37,88 @@ def test_written_context_reuses_gptr_chinese_bm25():
     assert matches and '通风' in matches[0]
 
 
+def test_design_basis_rules_reach_writer_and_preserve_file_entries():
+    from safety_report.pipeline import SYSTEM, load_chapter_skill
+    from safety_report.writing_style import writing_guidance
+
+    filing = '1.1建设项目的批复（核准、备案）文件'
+    contract = '1.4设计合同'
+    other = '1.5项目的其他相关文件'
+    evidence = [{'id': 'e1', 'source': '备案证明.pdf', 'locator': 'page[1]',
+                 'text': '建设项目备案证明，项目代码 TEST-001。'},
+                {'id': 'e2', 'source': '工艺流程图.pdf', 'locator': 'page[1]',
+                 'text': '设计资料：工艺流程图，图号 GY-01。'}]
+    entries = {filing: ('（1）建设项目备案证明（项目代码 TEST-001）。', 'e1'),
+               other: ('（1）工艺流程图（图号 GY-01）。', 'e2')}
+    writer_prompts = []
+
+    def complete(system, payload, model, **kwargs):
+        if '资料筛选 Agent' in system:
+            return {'sources': [{'id': item['id'], 'decision': 'use', 'reason': '相关'}
+                                for item in payload['sources']]}
+        if '安全生产报告的审稿人员' in system:
+            return {'issues': []}
+        writer_prompts.append(system)
+        heading = payload['target_subsections'][0]
+        if heading == contract:
+            return {'paragraphs': [], 'tables': [], 'missing': ['需提供设计合同'], 'review': []}
+        text, ident = entries[heading]
+        return {'paragraphs': [{'heading': heading, 'text': text, 'evidence_ids': [ident]}],
+                'tables': [], 'missing': [], 'review': []}
+
+    system = SYSTEM + '\n' + load_chapter_skill('1') + '\n' + writing_guidance('facility_design')
+    result = run_chapter_graph(system, {'chapter': '1 设计依据',
+        'required_subsections': [filing, contract, other], 'evidence': evidence}, {},
+        search=lambda query: [], validate=lambda draft: [], complete=complete)
+
+    assert len(writer_prompts) == 3
+    for prompt in writer_prompts:
+        assert '逐项列举' in prompt
+        assert '合同小节须有合同材料' in prompt
+        assert '投资、产能' in prompt
+    assert [(p['heading'], p['text'], p['evidence_ids']) for p in result['paragraphs']] == [
+        (heading, text, [ident]) for heading, (text, ident) in entries.items()]
+    assert '需提供设计合同' in result['missing']
+
+
+def test_basis_file_lists_retain_sources_when_one_report_dominates_retrieval():
+    from unittest.mock import Mock, patch
+    from safety_report import pipeline
+
+    filing = '1.1建设项目的批复（核准、备案）文件'
+    other = '1.5项目的其他相关文件'
+    chunks = [{'id': f'report-{i}', 'source': '综合分析报告.docx', 'locator': str(i),
+               'text': '项目的其他相关文件及建设项目批复情况。'} for i in range(24)]
+    filenames = ['营业执照.pdf', '备案证明.pdf', '租赁合同.pdf', '工艺图.pdf', '总图.pdf', '消防图.pdf', '电气图.pdf']
+    chunks += [{'id': f'file-{i}', 'source': name, 'locator': 'page[1]',
+                'text': '企业提供的项目文件。'} for i, name in enumerate(filenames)]
+    index = Mock(client=None, semantic_error='')
+    index.search.side_effect = lambda query, limit=10: chunks[:limit]
+    received = {}
+
+    def complete(system, payload, model, **kwargs):
+        if '资料筛选 Agent' in system:
+            return {'sources': [{'id': item['id'], 'decision': 'use', 'reason': '相关'}
+                                for item in payload['sources']]}
+        if '安全生产报告的审稿人员' in system:
+            return {'issues': []}
+        heading = payload['target_subsections'][0]
+        received[heading] = payload['evidence']
+        item = next(item for item in payload['evidence'] if item['source'] == '营业执照.pdf')
+        return {'paragraphs': [{'heading': heading, 'text': '（1）营业执照。', 'evidence_ids': [item['id']]}],
+                'tables': [], 'missing': [], 'review': []}
+
+    profile = {'sha256': 'template', 'report_type': 'facility_design', 'headings': [
+        {'text': '1 设计依据', 'level': 1}, {'text': filing, 'level': 2}, {'text': other, 'level': 2}]}
+    with patch.object(pipeline, 'HybridEvidenceIndex', return_value=index), patch.object(pipeline, 'complete_json', side_effect=complete):
+        result = pipeline.generate(profile, {'chunks': chunks}, [], True, model={'name': '模拟模型'}, chapter_ids=['1'])
+
+    assert result['generation_errors'] == []
+    for heading in (filing, other):
+        assert {item['source'] for item in received[heading]} == {'综合分析报告.docx', *filenames}
+        assert len({item['source'] for item in received[heading]}) == 8
+
+
 def test_subsection_rejects_unknown_evidence_and_never_persists_invalid_output(tmp_path):
     evidence=[{'id':'e1','source':'模拟','locator':'1','text':'机械通风'}]
     calls=[]
@@ -50,6 +132,45 @@ def test_subsection_rejects_unknown_evidence_and_never_persists_invalid_output(t
         run_chapter_graph('写作',{'chapter':'2 概况','required_subsections':['2.1 通风','2.2 工艺'],'evidence':evidence},{},search=lambda q:[],validate=lambda d:[],complete=complete,checkpoint=NodeCheckpoint(path,{}))
     assert calls==['draft','draft']
     assert '不应保存' not in path.read_text()
+
+
+def test_missing_basis_retries_without_placeholder_and_continues_later_subsections():
+    from safety_report.pipeline import SYSTEM, validate_section
+
+    laws = '1.2国家有关法律法规'
+    other = '1.5项目的其他相关文件'
+    evidence = [{'id': 'e1', 'source': '工艺图.pdf', 'locator': 'page[1]', 'text': '工艺图 GY-01'}]
+    calls = []
+
+    def complete(system, payload, model, **kwargs):
+        if '资料筛选 Agent' in system:
+            return {'sources': [{'id': 'e1', 'decision': 'use', 'reason': '相关'}]}
+        if '安全生产报告的审稿人员' in system:
+            return {'issues': []}
+        heading = payload['target_subsections'][0]
+        calls.append(heading)
+        if heading == laws:
+            if calls.count(laws) == 1:
+                return {'paragraphs': [{'heading': laws, 'text': '暂无可用法规资料', 'evidence_ids': []}],
+                        'tables': [], 'missing': [], 'review': []}
+            assert '本次允许引用的 evidence_ids' in system
+            assert 'e1' in system
+            assert 'paragraphs=[]、tables=[]' in system
+            return {'paragraphs': [], 'tables': [], 'missing': ['需提供本项目适用的法律法规依据'], 'review': []}
+        return {'paragraphs': [{'heading': other, 'text': '（1）工艺图 GY-01。', 'evidence_ids': ['e1']}],
+                'tables': [], 'missing': [], 'review': []}
+
+    def validate(draft):
+        validate_section(draft, evidence)
+        return []
+
+    result = run_chapter_graph(SYSTEM, {'chapter': '1 设计依据',
+        'required_subsections': [laws, other], 'evidence': evidence}, {},
+        search=lambda query: [], validate=validate, complete=complete)
+
+    assert calls == [laws, laws, other]
+    assert [item['heading'] for item in result['paragraphs']] == [other]
+    assert result['missing'] == ['需提供本项目适用的法律法规依据']
 
 
 @pytest.mark.parametrize(('returned_heading', 'allowed'), [

@@ -1,5 +1,24 @@
 
 // Product shell: task-oriented navigation and a project overview built from live state.
+const sidebarToggle = $('#sidebar-toggle');
+const workbenchShell = $('.shell');
+const sidebarPreference = 'safety-sidebar-collapsed';
+
+function setSidebarCollapsed(collapsed) {
+  workbenchShell.classList.toggle('sidebar-collapsed', collapsed);
+  const label = collapsed ? '展开左侧菜单' : '收起左侧菜单';
+  sidebarToggle.setAttribute('aria-expanded', String(!collapsed));
+  sidebarToggle.setAttribute('aria-label', label);
+  sidebarToggle.title = label;
+}
+
+sidebarToggle.onclick = () => {
+  const collapsed = !workbenchShell.classList.contains('sidebar-collapsed');
+  setSidebarCollapsed(collapsed);
+  localStorage.setItem(sidebarPreference, collapsed ? '1' : '0');
+};
+setSidebarCollapsed(localStorage.getItem(sidebarPreference) === '1');
+
 const hero=$('.intro');
 const heroText=hero.querySelector('div');
 heroText.classList.add('hero-copy');
