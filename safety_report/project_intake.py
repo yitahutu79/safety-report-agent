@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from .documents import parse_file, EvidenceIndex
+from .documents import PDF_PARSER_REVISION,parse_file, EvidenceIndex
 from .document_catalog import DOMAINS
 from .report_template import extract_body_blocks
 
@@ -20,12 +20,14 @@ TEXT_FIELDS={'regulation':'文件名称','hazard':'危险因素','facility':'设
 
 
 def reference_analysis(target,files,previous):
-    cache={d['sha256']:d for d in previous.get('reference_documents',[])}
+    cache={(d['sha256'],d.get('file')):d for d in previous.get('reference_documents',[])}
     documents=[];chunks=[];warnings=[]
     for file in files:
         if file.get('active',True) and file['role']=='reference' and Path(file['name']).suffix.lower() in {'.docx','.pdf','.txt','.csv','.md','.json'}:
             try:
-                document=copy.deepcopy(cache.get(file['sha256']) or parse_file(target/'uploads'/file['stored']))
+                cached=cache.get((file['sha256'],file['stored']))
+                if cached and Path(file['name']).suffix.lower()=='.pdf' and (cached.get('pdf_parser_revision')!=PDF_PARSER_REVISION or cached.get('ocr_retry')):cached=None
+                document=copy.deepcopy(cached or parse_file(target/'uploads'/file['stored']))
                 attach_section_context(document)
                 for chunk in document['chunks']:
                     chunk.update(source=file['name'],sha256=file['sha256'],source_file_id=file['id'],document_type=file.get('document_type','other'),source_role='reference',corpus='reference_document')

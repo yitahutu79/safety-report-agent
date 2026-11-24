@@ -14,11 +14,15 @@ _ACTIVE_LOCK = threading.Lock()
 _ACTIVE_SOCKETS = {}
 
 
-class ModelOutputTruncated(ValueError):
+class ModelDeadlineExceeded(ValueError):
     pass
 
 
-class ModelDeadlineExceeded(ValueError):
+class ModelOutputFormatError(ValueError):
+    """The provider responded, but did not supply usable structured output."""
+
+
+class ModelOutputTruncated(ModelOutputFormatError):
     pass
 
 
@@ -256,14 +260,14 @@ def complete_json(system, payload, config=None, max_tokens=8000, cancel_event=No
         if isinstance(content, list):
             content = ''.join(part.get('text', '') for part in content if isinstance(part, dict))
         if not isinstance(content, str):
-            raise ValueError('模型没有返回文本内容')
+            raise ModelOutputFormatError('模型没有返回文本内容')
         content = content.strip()
         if not content:
             if message.get('refusal'):
                 raise ValueError('模型拒绝了本次生成，请检查模型权限或任务内容')
             if result.get('_stream_meta', {}).get('reasoning_chars'):
                 raise ValueError('模型只返回了推理内容，没有输出章节正文；请切换模型或降低推理强度')
-            raise ValueError('模型返回了空正文，请稍后重试或切换模型')
+            raise ModelOutputFormatError('模型返回了空正文，请稍后重试或切换模型')
         # Compatible providers sometimes wrap otherwise valid JSON in prose or fences.
         # Parse a complete object from the response instead of rejecting the whole chapter.
         decoder = json.JSONDecoder()
@@ -277,10 +281,10 @@ def complete_json(system, payload, config=None, max_tokens=8000, cancel_event=No
                     continue
         output = json.loads(content)
         if not isinstance(output, dict):
-            raise ValueError('模型输出必须是 JSON 对象')
+            raise ModelOutputFormatError('模型输出必须是 JSON 对象')
         return output
     except json.JSONDecodeError:
-        raise ValueError(f'模型返回了 {len(content)} 个字符，但没有形成完整 JSON 对象；输出可能被截断或格式不符合要求') from None
+        raise ModelOutputFormatError(f'模型返回了 {len(content)} 个字符，但没有形成完整 JSON 对象；输出可能被截断或格式不符合要求') from None
     except (KeyError, IndexError, TypeError, AttributeError):
         raise ValueError('模型服务返回格式不完整，未找到标准 choices/message/content 字段') from None
 

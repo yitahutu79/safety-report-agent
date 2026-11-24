@@ -10,9 +10,11 @@ from collections import defaultdict
 import zipfile
 from pathlib import Path
 import xml.etree.ElementTree as ET
+from .ocr import recognize_pdf_page
 
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 NS = {"w": W[1:-1]}
+PDF_PARSER_REVISION = 1
 
 
 def text_of(node):
@@ -107,6 +109,7 @@ def parse_file(path):
     suffix = path.suffix.lower()
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     warnings = []
+    details = {}
     if suffix == ".docx":
         blocks, _ = read_docx(path)
     elif suffix == ".pdf":
@@ -115,8 +118,11 @@ def parse_file(path):
         except ImportError as exc:
             raise ValueError("PDF 解析依赖未安装；请使用 Docker 版本或安装 requirements.txt") from exc
         blocks = []
+        details = {"pdf_parser_revision": PDF_PARSER_REVISION, "ocr_pages": [],
+                   "low_text_pages": [], "ocr_retry": False}
         pages = PdfReader(path).pages
         for i in range(1, len(pages) + 1):
+            method = "text"
             try:
                 text = (pages[i - 1].extract_text() or "").strip()
             except Exception as exc:
@@ -124,14 +130,26 @@ def parse_file(path):
                     text = _extract_pdf_page_with_pdfium(path, i - 1)
                 except Exception:
                     text = ""
-                if not text:
-                    warnings.append(f"第 {i} 页文本提取失败（{type(exc).__name__}），请检查原图或使用 OCR；其余页继续读取")
-                    continue
-                warnings.append(f"第 {i} 页已用备用解析器恢复文字，图纸字段仍需对照原图核对")
+                if text:
+                    warnings.append(f"第 {i} 页已用备用解析器恢复文字，图纸字段仍需对照原图核对")
+                else:
+                    warnings.append(f"第 {i} 页文本提取失败（{type(exc).__name__}），尝试 OCR；其余页继续读取")
             if len(text) < 30:
-                warnings.append(f"第 {i} 页缺少文本层，需要 OCR 或图纸人工核对")
+                try:
+                    recognized = recognize_pdf_page(path, i - 1)
+                    if len(recognized) > len(text):
+                        text = recognized
+                        method = "ocr"
+                        details["ocr_pages"].append(i)
+                        warnings.append(f"第 {i} 页已通过本地 OCR 提取文字，请对照原件核对")
+                except Exception as exc:
+                    details["ocr_retry"] = True
+                    warnings.append(f"第 {i} 页 OCR 执行失败（{type(exc).__name__}），其余页继续读取")
+            if len(text) < 30:
+                details["low_text_pages"].append(i)
+                warnings.append(f"第 {i} 页可提取文字不足，请核对原件或补充可读文本")
             if text:
-                blocks.append({"kind": "paragraph", "text": text, "locator": f"page[{i}]"})
+                blocks.append({"kind": "paragraph", "text": text, "locator": f"page[{i}]", "method": method})
     elif suffix == ".csv":
         rows = list(csv.reader(io.StringIO(decode(path.read_bytes()))))
         blocks = [{"kind": "table", "rows": rows, "text": "\n".join(" | ".join(r) for r in rows), "locator": "csv[1]"}]
@@ -145,10 +163,16 @@ def parse_file(path):
         # 固定重叠窗口仅用于检索；结构化表格仍保留在原始 blocks 中。
         for offset in range(0, len(block["text"]), 1800):
             text = block["text"][offset:offset + 2200]
-            evidence_id = hashlib.sha256(f"{digest}:{block['locator']}:{offset}".encode()).hexdigest()[:20]
-            chunks.append({"id": evidence_id, "source": path.name, "sha256": digest,
-                           "locator": block["locator"], "offset": offset, "kind": block["kind"], "text": text})
-    return {"file": path.name, "sha256": digest, "blocks": blocks, "chunks": chunks, "warnings": warnings}
+            identity = f"{digest}:{block['locator']}:{offset}"
+            if block.get("method") == "ocr":
+                identity += ":ocr"
+            evidence_id = hashlib.sha256(identity.encode()).hexdigest()[:20]
+            chunk = {"id": evidence_id, "source": path.name, "sha256": digest,
+                     "locator": block["locator"], "offset": offset, "kind": block["kind"], "text": text}
+            if block.get("method") == "ocr":
+                chunk["method"] = "ocr"
+            chunks.append(chunk)
+    return {"file": path.name, "sha256": digest, "blocks": blocks, "chunks": chunks, "warnings": warnings, **details}
 
 
 def decode(data):

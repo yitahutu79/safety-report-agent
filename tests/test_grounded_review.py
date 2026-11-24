@@ -1,3 +1,6 @@
+import pytest
+
+from safety_report import provider
 from safety_report.gptr_reviewer import ReviewerAgent, ground_findings, review_targets
 
 DRAFT={'paragraphs':[{'text':'项目投资200万元。许可项目经批准后开展。','evidence_ids':['e1']}],'tables':[]}
@@ -42,3 +45,38 @@ def test_style_is_advice_and_table_quotes_require_exact_cell():
     assert ok and not bad
     ok,bad=ground_findings([finding(target_id='t:0:0:1',draft_quote='100万元')],t,EVIDENCE)
     assert bad and not ok
+
+
+def test_malformed_provider_json_retries_with_complete_targets_and_evidence(monkeypatch):
+    import json
+
+    model = {'provider': 'qwen', 'model': 'mock-review', 'base_url': 'https://example.com/v1'}
+    requests = []
+
+    def request_json(config, suffix, body, **kwargs):
+        requests.append(body)
+        content = '{"issues": [' if len(requests) == 1 else '{"issues": []}'
+        return {'choices': [{'finish_reason': 'stop', 'message': {'content': content}}]}
+
+    monkeypatch.setattr(provider, 'request_json', request_json)
+    result = ReviewerAgent(provider.complete_json).run({'task': {}, 'draft': DRAFT, 'evidence': EVIDENCE, 'model': model})
+
+    assert result['review'] == []
+    assert len(requests) == 2
+    first, retry = [json.loads(body['messages'][1]['content']) for body in requests]
+    assert first['targets'] == retry['targets']
+    assert first['evidence'] == retry['evidence'] == EVIDENCE
+    assert 'draft' in first and 'draft' not in retry
+    assert '上次输出无法解析' in requests[1]['messages'][0]['content']
+
+
+def test_invalid_review_shape_retries_once_and_does_not_pass():
+    calls = []
+
+    def complete(prompt, payload, model, **kwargs):
+        calls.append(payload)
+        return {'unexpected': []}
+
+    with pytest.raises(ValueError, match='审稿结果格式异常，自动重试后仍失败'):
+        ReviewerAgent(complete).run({'task': {}, 'draft': DRAFT, 'evidence': EVIDENCE, 'model': {}})
+    assert len(calls) == 2

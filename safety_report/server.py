@@ -271,9 +271,56 @@ def invalidate(target):
     state_update(target, report_outdated=True)
 
 
+def is_text_source(file):
+    return (file.get('active', True) and file['role'] not in {'reference', 'attachment'}
+            and Path(file['name']).suffix.lower() in assets.TEXT)
+
+
+def remove_uploads(target, state, ids):
+    if not isinstance(ids, list) or not 1 <= len(ids) <= 100 or any(
+        not isinstance(file_id, str) or not re.fullmatch(r'[a-f0-9]{16}', file_id) for file_id in ids
+    ):
+        raise ValueError('请选择要删除的项目文件')
+    requested = set(ids)
+    removed = [file for file in state['files'] if file['id'] in requested]
+    if len(removed) != len(requested):
+        raise ValueError('部分文件已不存在，请刷新列表后重新选择')
+    remaining = [file for file in state['files'] if file['id'] not in requested]
+    reread = state['analysis_dirty'] or any(is_text_source(file) or (file['role']=='reference' and Path(file['name']).suffix.lower() in assets.TEXT) for file in removed)
+    message = f'已删除 {len(removed)} 份资料'
+    changes = {}
+    if reread:
+        names = {name for file in removed for name in (file['name'], file['stored'])}
+        for field in state['fields']:
+            previous = field.get('candidates', [])
+            kept = [candidate for candidate in previous if candidate.get('source') not in names]
+            value = field.get('value')
+            lost_source = (value and not field.get('manual')
+                           and any(candidate.get('value') == value for candidate in previous)
+                           and not any(candidate.get('value') == value for candidate in kept))
+            field.update(candidates=kept, conflict=len({candidate['value'] for candidate in kept}) > 1)
+            if lost_source:
+                field.update(confirmed=False, changed=True)
+        changes.update(fields=state['fields'], analysis_dirty=True, uploads_need_reread=True,
+                       chunk_count=0, warnings=[], preflight_result=None, qa_result=None)
+        if any(is_text_source(file) for file in remaining):
+            message += '，请重新读取剩余资料'
+        else:
+            message += '，请上传可读取的项目资料'
+    # Remove membership and save recovery metadata in one atomic state write.
+    # The archived copies remain local but cannot be opened via upload routes.
+    archived = state.get('_archived_uploads', []) + [
+        {**file, 'deleted_at': time.time()} for file in removed
+    ]
+    state_update(target, files=remaining, _archived_uploads=archived,
+                 data_revision=state['data_revision'] + 1, source_changes_pending=state['source_changes_pending'] or reread,
+                 report_outdated=True, message=message, **changes)
+    return {'ok': True, 'removed': len(removed), 'message': message}
+
+
 def analyze_project(target, model=None):
     state = upgrade_state(load(target / 'state.json'))
-    source_files = [f for f in state['files'] if f.get('active', True) and f['role'] not in {'reference', 'attachment'} and Path(f['name']).suffix.lower() in assets.TEXT]
+    source_files = [f for f in state['files'] if is_text_source(f)]
     previous = load(target / 'analysis.json', {})
     labels = {f['stored']: f['name'] for f in state['files']}
     metadata = {f['stored']: {'document_type': f.get('document_type', 'other'),
@@ -305,7 +352,20 @@ def analyze_project(target, model=None):
     from .project_intake import reference_analysis,automatic_candidates,reference_reuse_profile,available_files
     from .structured_data import merge_candidates
     refs,reference_chunks,reference_warnings=reference_analysis(target,state['files'],previous)
-    if not result['chunks'] and not reference_chunks:raise ValueError('没有提取出可用文本，已上传但无法读取的文件请转换或OCR')
+    documents={d['file']:d for d in result['documents']+refs}
+    for file in state['files']:
+        document=documents.get(file['stored'])
+        if document is not None:
+            if not document['chunks']:file['read_status']='未提取到文字，请查看提示'
+            elif document.get('low_text_pages'):file['read_status']='有页面文字不足，请查看提示'
+            elif document.get('ocr_pages'):file['read_status']='已 OCR，待核对'
+            elif file['role']=='reference':file['read_status']='参考正文已读取，项目适用性待确认'
+            else:file['read_status']='已读取'
+        elif Path(file['name']).suffix.lower() in assets.TEXT and file['role']=='source':file['read_status']='未读取，请查看提示'
+        else:file['read_status']=file['status']
+    if not result['chunks'] and not reference_chunks:
+        state_update(target,files=state['files'],warnings=result['warnings']+reference_warnings)
+        raise ValueError('没有提取出可用文本，已上传但无法读取的文件请转换或OCR')
     result.update(reference_documents=refs,reference_chunks=reference_chunks)
     result['warnings']+=reference_warnings
     auto,coverage=automatic_candidates(result,state['files'])
@@ -334,21 +394,13 @@ def analyze_project(target, model=None):
         semantic_index.client.close()
     else:
         result['warnings'].append('语义索引未就绪，生成时将使用关键词检索：' + (semantic_index.semantic_error or '索引未配置'))
-    file_results = {d['sha256']: {'parsed': True, 'blocks': len(d['blocks'])} for d in result['documents']+refs}
-    for file in state['files']:
-        if file['sha256'] in file_results:
-            file['read_status'] = '参考正文已读取，项目适用性待确认' if file['role']=='reference' else '已读取'
-        elif Path(file['name']).suffix.lower() in assets.TEXT and file['role'] == 'source':
-            file['read_status'] = '未读取，请查看提示'
-        else:
-            file['read_status'] = file['status']
     with LOCK:
         save(target / 'analysis.json', result)
         state_update(target, fields=result['fields'], files=state['files'], warnings=result['warnings'],
                      chunk_count=len(result['chunks']),reference_chunk_count=len(reference_chunks),structured_candidate_count=len(structured),
                      reference_reuse_count=len(reuse['body_blocks']),intake_coverage=coverage,
                      data_revision=state['data_revision']+int(bool(added or retired or reference_chunks!=previous.get('reference_chunks',[]))),
-                     report_outdated=bool(state.get('report_version')) or state['report_outdated'],analysis_dirty=False, stage='review')
+                     report_outdated=bool(state.get('report_version')) or state['report_outdated'],analysis_dirty=False, uploads_need_reread=False, stage='review')
     return result
 
 
@@ -384,6 +436,7 @@ def validate_subsection_scope(data,report,chapter_ids):
 
 
 def chapter_materials_plan(target, chapter_id, model, cancel_event=None, checkpoint=None, on_progress=lambda text:None, subsection_titles=None):
+    if load(target/'state.json').get('uploads_need_reread'):raise ValueError('项目资料已删除，请先重新读取剩余资料')
     report = template_compatible_report(target)
     section = next((item for item in (report or {}).get('sections', [])
                     if (item.get('id') or (re.match(r'\d+', item.get('title', '')).group() if re.match(r'\d+', item.get('title', '')) else '')) == chapter_id), None)
@@ -679,6 +732,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json({'model_ready': bool(config['models']), 'model': '',
                     'map_ready': bool(os.environ.get('AMAP_WEB_KEY')), 'pdf_ready': bool(importlib.util.find_spec('pypdf')),
                     'image_ready': bool(importlib.util.find_spec('PIL')), 'pdf_render_ready': bool(importlib.util.find_spec('pypdfium2')),
+                    'ocr_ready': all(importlib.util.find_spec(name) for name in ('rapidocr', 'onnxruntime', 'pypdfium2')),
                     'template': {key: load(PROFILE)[key] for key in ('table_count', 'image_resources')}, 'version': '0.9.0'})
             if path == '/api/template':
                 profile = project_profile(directory(query['project_id'][0])) if query.get('project_id') else report_profile(query.get('report_type', [DEFAULT_TYPE])[0], load(PROFILE))
@@ -702,10 +756,14 @@ class Handler(BaseHTTPRequestHandler):
                 trash = DATA / '.trash'
                 with LOCK:
                     projects = [load(p) for p in trash.glob('*/state.json')]
+                    for project in projects:
+                        project.pop('_archived_uploads', None)
                 return self.json(sorted(projects, key=lambda p: p.get('updated_at', 0), reverse=True))
             if path == '/api/projects':
                 with LOCK:
                     projects = [load(p) for p in DATA.glob('*/state.json')]
+                    for project in projects:
+                        project.pop('_archived_uploads', None)
                 return self.json(sorted(projects, key=lambda p: p['updated_at'], reverse=True))
             match = re.fullmatch(r'/api/projects/([a-f0-9]{24})(?:/(.*))?', path)
             if not match:
@@ -765,7 +823,8 @@ class Handler(BaseHTTPRequestHandler):
             if not action:
                 with LOCK:
                     result = upgrade_state(load(target / 'state.json'))
-                    analysis = load(target / 'analysis.json', {})
+                    result.pop('_archived_uploads', None)
+                    analysis = {} if result.get('uploads_need_reread') else load(target / 'analysis.json', {})
                     result['evidence'] = analysis.get('chunks', [])[:25]
                     result['downloads'] = [n for n in sorted(DOWNLOADS) if (target / n).exists()]
                     result['versions'] = versions.history(target)
@@ -968,6 +1027,8 @@ class Handler(BaseHTTPRequestHandler):
                     data = self.input_json()
                     ledger = MeasuresLedger(target / 'measures.json')
                     if data.get('operation') == 'extract':
+                        if state.get('uploads_need_reread'):
+                            raise ValueError('项目资料已删除，请先重新读取剩余资料')
                         model = settings.resolve(DATA, data.get('model_id'))
                         analysis = load(target / 'analysis.json', {})
                         chunks = [c for c in analysis.get('chunks', []) if c.get('document_type') == 'safety_analysis']
@@ -996,7 +1057,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json({'item': ledger.save(data, ident or None)})
                 if action == 'calculations':
                     data = self.input_json()
-                    analysis = load(target / 'analysis.json', {})
+                    analysis = {} if state.get('uploads_need_reread') else load(target / 'analysis.json', {})
                     ledger = CalculationLedger(target / 'calculations.json')
                     if data.get('operation') == 'compare_distance':
                         name = str(data.get('name', '')).strip()
@@ -1280,6 +1341,8 @@ class Handler(BaseHTTPRequestHandler):
                     state_update(target, cancel_requested=True, message='正在停止当前任务并结束模型请求；已有草稿保留')
                     provider.cancel_request(event)
                     return self.json({'ok': True, 'message': '已发送停止请求'})
+                if action=='delete-files' and 'ids' in data:
+                    return self.json(remove_uploads(target,state,data['ids']))
                 if action in {'delete-file', 'delete-files'}:
                     delete_project_file(target, data)
                     return self.json({'ok': True})
@@ -1446,7 +1509,7 @@ class Handler(BaseHTTPRequestHandler):
                                        '删除章节：' + '、'.join(data.get('delete_chapter_ids', [])) if data.get('delete_chapter_ids') else
                                        '页面编辑保存')
                     meta = versions.commit(target, report, export, kind=action, description=description)
-                    state_update(target, report_version=meta['id'], report_outdated=state['source_changes_pending'] or state['analysis_dirty'], message='已保存为新版本，历史版本保留', stage='done')
+                    state_update(target, report_version=meta['id'], report_outdated=state['source_changes_pending'] or state['analysis_dirty'], message='已保存为新版本，历史版本保留', stage='done', error='')
                     return self.json({'ok': True, 'version': meta['id']})
                 if action == 'flow':
                     result = draw_flow(data.get('steps'), target)

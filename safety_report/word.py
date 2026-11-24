@@ -84,7 +84,9 @@ def write_docx(report, profile, path, figures=()):
         rendered_figures.append((figure.get('placement') or {}, image_parts))
     for section in report['sections']:
         section_id = section_identity(section)
-        parts.append(paragraph(section['title'], 'Heading1'))
+        basis_section = (report.get('report_type', 'facility_design') == 'facility_design'
+                         and section_id == '1' and '设计依据' in section['title'] and not profile.get('paragraph_formats'))
+        parts.append(paragraph(section['title'], 'BasisHeading1' if basis_section else 'Heading1'))
         if section.get('generation_status') == 'not_generated':
             parts.append(paragraph('本章尚未生成。请在工作台按章补写后，再导出完整报告。'))
             continue
@@ -105,12 +107,13 @@ def write_docx(report, profile, path, figures=()):
                     continue
                 match = re.match(r'\d+(?:\.\d+)*', heading)
                 level = len(match.group().split('.')) if match else 2
-                parts.append(paragraph(heading, 'Heading' + str(min(level, 3))))
+                heading_style = 'BasisHeading2' if basis_section and level == 2 else 'Heading' + str(min(level, 3))
+                parts.append(paragraph(heading, heading_style))
             for kind, item in all_items:
                 if item.get('heading', section['title']) != heading:
                     continue
                 if kind == 'paragraph':
-                    parts.append(paragraph(item['text']))
+                    parts.append(paragraph(item['text'], 'BasisEntry' if basis_section else 'Normal'))
                     position = next((i for i, p in enumerate(section.get('paragraphs', [])) if p is item), None)
                     for location, image_parts in rendered_figures:
                         if location.get('section_id') == section_id and location.get('paragraph_index') is not None and location.get('paragraph_index') == position:
@@ -141,7 +144,17 @@ def write_docx(report, profile, path, figures=()):
         keep = '<w:keepNext/>' if outline or sid == 'Caption' else ''
         bold = '<w:b/>' if outline or sid == 'Title' else ''
         styles += f'<w:style w:type="paragraph" w:styleId="{sid}"><w:name w:val="{name}"/><w:basedOn w:val="Normal"/><w:pPr>{outline}{keep}<w:ind w:firstLine="0"/><w:spacing w:before="160" w:after="120"/></w:pPr><w:rPr>{bold}<w:color w:val="000000"/><w:sz w:val="{points * 2}"/></w:rPr></w:style>'
-    styles += '</w:styles>'
+    styles += '''<w:style w:type="paragraph" w:styleId="BasisHeading1">
+<w:name w:val="Design basis chapter"/><w:basedOn w:val="Heading1"/>
+<w:pPr><w:pageBreakBefore/></w:pPr></w:style>
+<w:style w:type="paragraph" w:styleId="BasisHeading2">
+<w:name w:val="Design basis heading"/><w:basedOn w:val="Heading2"/>
+<w:pPr><w:spacing w:before="120" w:after="120" w:line="360" w:lineRule="auto"/></w:pPr>
+<w:rPr><w:rFonts w:ascii="黑体" w:hAnsi="黑体" w:eastAsia="黑体"/><w:b w:val="0"/><w:sz w:val="28"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="BasisEntry"><w:name w:val="Design basis entry"/>
+<w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="both"/><w:autoSpaceDE w:val="0"/><w:autoSpaceDN w:val="0"/>
+<w:spacing w:after="0" w:line="360" w:lineRule="auto"/><w:ind w:firstLine="560"/></w:pPr>
+</w:style></w:styles>'''
     if profile.get('paragraph_formats'):
         from .report_template import apply_paragraph_formats
         styles = apply_paragraph_formats(styles, profile['paragraph_formats'])

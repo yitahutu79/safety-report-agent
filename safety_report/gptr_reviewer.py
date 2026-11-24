@@ -13,6 +13,12 @@ category 只能是 factual（事实/阶段/数字错误）、omission（遗漏�
 FIELDS = ('target_id','draft_quote','evidence_id','evidence_quote','category','expected_text','reason','suggestion')
 SCHEMA = {'type':'object','properties':{'issues':{'type':'array','maxItems':6,'items':{'type':'object','properties':{k:{'type':'string'} for k in FIELDS},'required':list(FIELDS),'additionalProperties':False}}},'required':['issues'],'additionalProperties':False}
 
+RETRY_OUTPUT = """
+上次输出无法解析。本次只返回一个完整 JSON 对象，最外层唯一字段为 issues，值必须是数组。
+无需 Markdown、代码围栏、标题或解释。每条意见写必要的最短逐字引文和简短的差异与建议，并保留所有规定字段。
+逐一核对 targets 与 evidence 后，确实没有可定位的问题时才返回 {"issues":[]}。
+"""
+
 
 def review_targets(draft):
     targets = {}
@@ -56,6 +62,28 @@ class ReviewerAgent:
     def __init__(self, complete):
         self.complete=complete
 
+    def _collect_issues(self, payload, model, event):
+        options = {'response_schema': SCHEMA} if provider.is_local_ollama(model) else {}
+        for attempt in range(2):
+            if event and event.is_set():
+                raise provider.GenerationCancelled()
+            prompt = TEMPLATE
+            request = payload
+            if attempt:
+                prompt += RETRY_OUTPUT
+                # targets already contain the complete text and citation IDs of
+                # each paragraph and table cell. Keep evidence and omit the duplicate draft.
+                request = {key: value for key, value in payload.items() if key != 'draft'}
+            try:
+                response = self.complete(prompt, request, model, max_tokens=2600, cancel_event=event, **options)
+                issues = response.get('issues') if isinstance(response, dict) else None
+                if not isinstance(issues, list) or len(issues) > 6:
+                    raise provider.ModelOutputFormatError('模型审稿结果格式不正确')
+                return issues
+            except provider.ModelOutputFormatError as exc:
+                if attempt:
+                    raise ValueError(f'审稿结果格式异常，自动重试后仍失败：{exc}') from exc
+
     def run(self, state):
         event=state.get('cancel_event')
         if event and event.is_set():raise provider.GenerationCancelled()
@@ -65,10 +93,7 @@ class ReviewerAgent:
                  'guidelines':task.get('guidelines',[]),'writing_requirements':task.get('writing_requirements',''),
                  'targets':targets,'draft':state['draft'],'evidence':state['evidence'],
                  'revision_notes':state.get('revision_notes',[])}
-        options={'response_schema':SCHEMA} if provider.is_local_ollama(state['model']) else {}
-        response=self.complete(TEMPLATE,payload,state['model'],max_tokens=2600,cancel_event=event,**options)
-        issues=response.get('issues')
-        if not isinstance(issues,list) or len(issues)>6:raise ValueError('模型审稿结果格式不正确，未保存本章')
+        issues = self._collect_issues(payload, state['model'], event)
         grounded,records=ground_findings(issues,targets,state['evidence'])
         candidates=[f for f in grounded if f['category']!='style']
         records += [{'finding':f,'status':'advisory','reason':'文风建议不触发自动返修'} for f in grounded if f['category']=='style']
