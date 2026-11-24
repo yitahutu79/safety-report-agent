@@ -197,8 +197,9 @@ def apply_edits(report, changed_sections, add_chapter=None, delete_chapter_ids=N
                     raise ValueError('表格行列格式不正确')
                 if not all(isinstance(cell, str) and len(cell) <= 10000 for row in [table['headers']] + rows for cell in row):
                     raise ValueError('表格内容必须是长度合理的文本')
-                revised_tables.append({**original, 'headers': table['headers'], 'rows': rows,
-                    'human_edited': original.get('human_edited', False) or table['headers'] != original['headers'] or rows != original['rows']})
+                from .table_reuse import synchronize_merged_edits
+                revised_tables.append(synchronize_merged_edits(original,{**original, 'headers': table['headers'], 'rows': rows,
+                    'human_edited': original.get('human_edited', False) or table['headers'] != original['headers'] or rows != original['rows']}))
             section['tables'] = revised_tables
         changed.add(section.get('id') or (re.match(r'\d+', section['title']).group() if re.match(r'\d+', section['title']) else ''))
     if add_chapter is not None:

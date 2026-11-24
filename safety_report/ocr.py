@@ -29,4 +29,20 @@ def recognize_pdf_page(path, page_index):
 
     with _ENGINE_LOCK:
         result = _engine()(png)
-    return "\n".join(line.strip() for line in (result.txts or ()) if line.strip())
+    return ordered_ocr_text(result.txts, result.boxes)
+
+
+def ordered_ocr_text(texts, boxes):
+    """Sort by spatial rows, keeping left labels before their right-hand values."""
+    texts=[] if texts is None else list(texts)
+    if boxes is None or len(boxes)!=len(texts):
+        return "\n".join(t.strip() for t in texts if t.strip())
+    items=[]
+    for text,box in zip(texts,boxes):
+        points=list(box);xs=[float(p[0]) for p in points];ys=[float(p[1]) for p in points]
+        if text.strip():items.append((min(ys),min(xs),max(ys)-min(ys),text.strip()))
+    rows=[]
+    for item in sorted(items):
+        if rows and abs(item[0]-rows[-1][0][0])<=max(3,min(item[2],rows[-1][0][2])*.45):rows[-1].append(item)
+        else:rows.append([item])
+    return "\n".join("    ".join(p[3] for p in sorted(row,key=lambda p:p[1])) for row in rows)

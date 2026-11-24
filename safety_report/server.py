@@ -272,6 +272,7 @@ def invalidate(target):
 
 
 def is_text_source(file):
+    if file.get('appendix_mode')=='original':return False
     return (file.get('active', True) and file['role'] not in {'reference', 'attachment'}
             and Path(file['name']).suffix.lower() in assets.TEXT)
 
@@ -406,6 +407,7 @@ def analyze_project(target, model=None):
 
 def export_report(target, report, output, files):
     figures, warnings = assets.collect_figures(target, files)
+    figures += assets.collect_original_appendices(target, files)
     if (target / 'flow.png').exists():
         figures.append({'path': str(target / 'flow.png'), 'caption': '工艺流程图', 'source': '已核对的工艺步骤'})
     if (target / 'map.png').exists():
@@ -794,8 +796,14 @@ class Handler(BaseHTTPRequestHandler):
                     public['quality_review'] = view_review
                     public['quality_review_scope'] = '查看时复核（含当前台账）；不覆盖历史版本审核快照'
                     return self.json({'report': public, 'version': load(target / 'state.json').get('report_version', '')})
+            if action == 'source-tables':
+                from .table_reuse import source_tables
+                state=load(target/'state.json')
+                return self.json({'tables':source_tables(target,state['files'],query.get('file_id',[None])[0]),
+                    'note':'Word表格按原结构复用；PDF表格请通过原件附录保留原页，暂不猜测还原。'})
             if action == 'structured-data':
-                return self.json({'records':load(target / 'structured-data.json',[]),'coverage':load(target / 'state.json').get('structured_coverage'),'intake_coverage':load(target / 'state.json').get('intake_coverage',[])})
+                state=load(target/'state.json');appendix_only={f['id'] for f in state['files'] if f.get('appendix_mode')=='original'}
+                return self.json({'records':[r for r in load(target/'structured-data.json',[]) if r.get('file_id') not in appendix_only],'coverage':state.get('structured_coverage'),'intake_coverage':state.get('intake_coverage',[])})
             if action == 'professional-workspace':
                 state=upgrade_state(load(target / 'state.json'))
                 return self.json({'professional':ProfessionalLedger(target / 'professional.json',state['report_type']).list(),'calculations':CalculationLedger(target / 'calculations.json').list(),'measures':MeasuresLedger(target / 'measures.json').list(),'links':current_links(target,state)})
@@ -947,7 +955,7 @@ class Handler(BaseHTTPRequestHandler):
                         with LOCK:
                             shutil.move(str(trash), str(target))
                     return self.json({'ok': True})
-            match = re.fullmatch(r'/api/projects/([a-f0-9]{24})/(structured-bulk-review|structured-extract|structured-update|outline-edit|professional-link|chapter-approval|chapter-order|assembly-check|assemble|template-content-review|template-upload|template-apply|template-reset|upload|analyze|facts|generate|preflight|materials-plan|cancel|ack-error|clear-node-progress|flow|geocode|map|files|delete-file|delete-files|edit|restore|measures|calculations|professional|rag-test|knowledge-qa)', path)
+            match = re.fullmatch(r'/api/projects/([a-f0-9]{24})/(reuse-source-table|structured-regroup|structured-bulk-review|structured-extract|structured-update|outline-edit|professional-link|chapter-approval|chapter-order|assembly-check|assemble|template-content-review|template-upload|template-apply|template-reset|upload|analyze|facts|generate|preflight|materials-plan|cancel|ack-error|clear-node-progress|flow|geocode|map|files|delete-file|delete-files|edit|restore|measures|calculations|professional|rag-test|knowledge-qa)', path)
             if not match:
                 return self.json({'error': '接口不存在'}, 404)
             target, action = directory(match[1]), match[2]
@@ -1228,6 +1236,36 @@ class Handler(BaseHTTPRequestHandler):
                     state_update(target,busy=True,current_operation='structured-extract',cancel_requested=False,error='',message='正在准备相关片段')
                     POOL.submit(structured_extract_job,target,file['id'],domain,model,event)
                     return self.json({'ok':True},202)
+                if action=='reuse-source-table':
+                    from .table_reuse import source_tables,insert_source_table
+                    if data.get('base_version','')!=state.get('report_version',''):raise ValueError('报告已有新版本，请刷新后再插入原表')
+                    existing=versions.load_report(target)
+                    if not existing:raise ValueError('请先生成草稿，再选择原表插入位置')
+                    ident=data.get('section_id','');assert_unlocked(load(target/'chapter-workflow.json',{}),[ident])
+                    item=next((t for t in source_tables(target,state['files'],data.get('file_id')) if t['id']==data.get('table_id')),None)
+                    if not item or item['source_table_hash']!=data.get('source_table_hash'):raise ValueError('原表或来源已变化，请刷新预览')
+                    report=insert_source_table(existing,item,ident,data.get('heading',''))
+                    report['quality_review']=project_quality(target,report,state)
+                    versions.preserve_legacy(target)
+                    meta=versions.commit(target,report,lambda r,p:export_report(target,r,p,state['files']),kind='edit',description='直接复用原表：'+item['caption'])
+                    state_update(target,report_version=meta['id'],report_outdated=state['source_changes_pending'] or state['analysis_dirty'],message='原表已插入指定小节，未调用模型；请核对适用性',stage='done',error='')
+                    return self.json({'ok':True,'version':meta['id']})
+                if action=='structured-regroup':
+                    from .project_intake import automatic_candidates
+                    from .structured_data import merge_candidates
+                    analysis=load(target/'analysis.json',{})
+                    if not analysis:raise ValueError('请先读取项目资料')
+                    candidates,coverage=automatic_candidates(analysis,state['files'])
+                    records=load(target/'structured-data.json',[])
+                    signatures={r['signature'] for r in candidates}
+                    retired=[r for r in records if r.get('extraction_method')=='local_pattern_candidate' and r.get('status')=='draft' and r.get('revision')==1 and not r.get('history') and r.get('signature') not in signatures]
+                    retired_ids={r['id'] for r in retired}
+                    remaining=[r for r in records if r['id'] not in retired_ids]
+                    merge_candidates(remaining,candidates)
+                    save(target/'retired-fragment-candidates.json',load(target/'retired-fragment-candidates.json',[])+retired)
+                    save(target/'structured-data.json',remaining)
+                    state_update(target,intake_coverage=coverage,structured_candidate_count=len(remaining),data_revision=state['data_revision']+1,message='已按原文小节整理完整内容块，人工编辑和核对记录保留')
+                    return self.json({'ok':True,'count':len(remaining),'retired':len(retired)})
                 if action=='structured-bulk-review':
                     from .structured_data import bulk_review
                     records,changed=bulk_review(load(target/'structured-data.json',[]),data,{main_heading_id(h) for h in project_profile(target,state)['headings'] if h['level']==1},state['files'])
@@ -1362,6 +1400,12 @@ class Handler(BaseHTTPRequestHandler):
                         if data['include'] and not file['renderable']:
                             raise ValueError('此文件需要先导出 PDF/图片，才能嵌入报告')
                         file['include'] = data['include'] is True
+                    if 'appendix_mode' in data:
+                        mode=data['appendix_mode']
+                        if mode not in {'','original','original_and_extract'}:raise ValueError('原件附录设置无效')
+                        if mode and Path(file['name']).suffix.lower() not in assets.RASTER|{'.pdf'}:raise ValueError('整份原件附录支持PDF或图片，Word资料请先转为PDF')
+                        metadata_changed=(mode=='original')!=(file.get('appendix_mode')=='original')
+                        file['appendix_mode']=mode
                     if 'caption' in data:
                         file['caption'] = str(data['caption']).strip()[:160]
                     if 'pages' in data:

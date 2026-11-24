@@ -16,7 +16,10 @@ def paragraph(text, style="Normal"):
     return f'<w:p><w:pPr><w:pStyle w:val="{style}"/></w:pPr>{runs}</w:p>'
 
 
-def table(headers, rows, total_width=9184):
+def table(headers, rows, total_width=9184, layout=None):
+    if layout:
+        from .table_reuse import compatible_layout
+        if compatible_layout({'headers':headers,'rows':rows,'source_table_layout':layout}):return native_table(headers,rows,layout,total_width)
     count = max(1, len(headers))
     width = total_width // count
     borders = ''.join(f'<w:{edge} w:val="single" w:sz="4" w:color="D9D9D9"/>' for edge in ('top', 'left', 'bottom', 'right', 'insideH', 'insideV'))
@@ -33,12 +36,12 @@ def table(headers, rows, total_width=9184):
     return result + '</w:tbl>' + paragraph('')
 
 
-def image_paragraph(rid, index, width, height):
-    cx = 5_500_000
+def image_paragraph(rid, index, width, height, max_width=5_500_000, max_height=7_500_000):
+    cx = max_width
     cy = int(cx * height / width)
-    if cy > 7_500_000:
-        cx = int(cx * 7_500_000 / cy)
-        cy = 7_500_000
+    if cy > max_height:
+        cx = int(cx * max_height / cy)
+        cy = max_height
     return f'''<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:drawing>
     <wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="{cx}" cy="{cy}"/>
     <wp:docPr id="{index}" name="报告图件{index}" descr="项目图件"/>
@@ -70,6 +73,12 @@ def write_docx(report, profile, path, figures=()):
     relationships = [f'<Relationship Id="rStyles" Type="{R}/styles" Target="styles.xml"/>', f'<Relationship Id="rSettings" Type="{R}/settings" Target="settings.xml"/>']
     image_files = []
     rendered_figures = []
+    original_pages=[]
+    section_format=(profile.get('sections') or [{}])[0]
+    page_size=section_format.get('pgSz',{'w':'11905','h':'16838'})
+    page_margins=section_format.get('pgMar',{'top':'1417','right':'1134','bottom':'1134','left':'1587'})
+    available_width=(int(page_size.get('w',11905))-int(page_margins.get('left',1587))-int(page_margins.get('right',1134)))*635
+    available_height=(int(page_size.get('h',16838))-int(page_margins.get('top',1417))-int(page_margins.get('bottom',1134))-600)*635
     for index, figure in enumerate(figures, 1):
         data = Path(figure['path']).read_bytes()
         if data[:8] != b'\x89PNG\r\n\x1a\n':
@@ -78,6 +87,9 @@ def write_docx(report, profile, path, figures=()):
         rid = f'rImage{index}'
         image_files.append((f'word/media/image{index}.png', data))
         relationships.append(f'<Relationship Id="{rid}" Type="{R}/image" Target="media/image{index}.png"/>')
+        if figure.get('original_appendix'):
+            original_pages.append((figure,image_paragraph(rid,index,width,height,available_width,available_height-600*635 if figure['original_page']==1 else available_height)))
+            continue
         image_parts = [paragraph(figure['caption'], 'Caption'), image_paragraph(rid, index, width, height)]
         if figure.get('source'):
             image_parts.append(paragraph(figure['source'], 'Evidence'))
@@ -89,11 +101,15 @@ def write_docx(report, profile, path, figures=()):
         parts.append(paragraph(section['title'], 'BasisHeading1' if basis_section else 'Heading1'))
         if section.get('generation_status') == 'not_generated':
             parts.append(paragraph('本章尚未生成。请在工作台按章补写后，再导出完整报告。'))
+            for t in section.get('tables',[]):
+                if t.get('source_table_id'):
+                    parts.append(paragraph(t['caption'],'Caption'));parts.append(table(t['headers'],t['rows'],layout=t.get('source_table_layout')))
             continue
         if section.get('generation_status') == 'failed' or section.get('needs_rewrite') or section.get('generation_error'):
             parts.append(paragraph('本章未通过生成检查，本次导出不包含旧版正文。请在工作台单独重试本章；失败信息见核对清单。'))
             continue
         all_items = [('paragraph', p) for p in section.get('paragraphs', [])] + [('table', t) for t in section.get('tables', [])]
+        if all('source_order' in item for _,item in all_items):all_items.sort(key=lambda pair:pair[1]['source_order'])
         filled = {item.get('heading', section['title']) for _, item in all_items}
         visible = set(filled)
         # 只显示有正文的子节及其父级，避免一百多个空标题和占位句。
@@ -120,7 +136,7 @@ def write_docx(report, profile, path, figures=()):
                             parts.extend(image_parts)
                 else:
                     parts.append(paragraph(item['caption'], 'Caption'))
-                    parts.append(table(item['headers'], item['rows']))
+                    parts.append(table(item['headers'], item['rows'],layout=item.get('source_table_layout')))
         if not all_items:
             parts.append(paragraph('本章尚待补充项目资料。'))
         for location, image_parts in rendered_figures:
@@ -132,6 +148,12 @@ def write_docx(report, profile, path, figures=()):
         parts.append(paragraph('项目图件', 'Heading1'))
         for image_parts in appendix_figures:
             parts.extend(image_parts)
+    # Each original page remains a single page image; do not rebuild its text or symbols.
+    for figure,image in original_pages:
+        parts.append('<w:p><w:r><w:br w:type="page"/></w:r></w:p>')
+        if figure['original_page']==1:
+            parts.append(paragraph('附录 · '+figure['caption'],'Heading1'))
+        parts.append(image)
     first_section = (profile.get('sections') or [{}])[0]
     size = first_section.get('pgSz', {'w': '11905', 'h': '16838'})
     margins = first_section.get('pgMar', {'top': '1417', 'right': '1134', 'bottom': '1134', 'left': '1587'})
@@ -168,3 +190,26 @@ def write_docx(report, profile, path, figures=()):
         archive.writestr('word/_rels/document.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + ''.join(relationships) + '</Relationships>')
         for name, data in image_files:
             archive.writestr(name, data)
+
+
+def native_table(headers,rows,layout,total_width=9184):
+    """Rebuild safe OOXML from source geometry, with no external source relationships."""
+    matrix=[headers]+rows;grid=layout['grid'];total=max(1,sum(grid));widths=[max(1,int(total_width*w/total)) for w in grid]
+    starts={(c['row'],c['col']):c for c in layout['cells']};covers={}
+    for cell in layout['cells']:
+        for r in range(cell['row'],cell['row']+cell['rowspan']):
+            for c in range(cell['col'],cell['col']+cell['colspan']):covers[r,c]=cell
+    parts=['<w:tbl><w:tblPr><w:tblW w:w="'+str(total_width)+'" w:type="dxa"/><w:tblBorders>'+''.join('<w:'+e+' w:val="single" w:sz="4" w:color="AAB4C0"/>' for e in ('top','left','bottom','right','insideH','insideV'))+'</w:tblBorders><w:tblLayout w:type="fixed"/></w:tblPr><w:tblGrid>'+''.join('<w:gridCol w:w="'+str(w)+'"/>' for w in widths)+'</w:tblGrid>']
+    for ri,row in enumerate(matrix):
+        parts.append('<w:tr>'+('<w:trPr><w:tblHeader/></w:trPr>' if ri<layout.get('header_rows',1) else ''))
+        col=0
+        while col<len(row):
+            cell=covers.get((ri,col));span=cell['colspan'] if cell else 1
+            if cell and col!=cell['col']:col+=1;continue
+            continued=cell and ri>cell['row'];props='<w:tcW w:w="'+str(sum(widths[col:col+span]))+'" w:type="dxa"/>'
+            if span>1:props+='<w:gridSpan w:val="'+str(span)+'"/>'
+            if cell and cell['rowspan']>1:props+='<w:vMerge'+('/>' if continued else ' w:val="restart"/>')
+            text='' if continued else row[col]
+            parts.append('<w:tc><w:tcPr>'+props+'<w:vAlign w:val="center"/></w:tcPr>'+paragraph(text,'TableText')+'</w:tc>');col+=span
+        parts.append('</w:tr>')
+    parts.append('</w:tbl>');return ''.join(parts)

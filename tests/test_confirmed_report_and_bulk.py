@@ -65,11 +65,13 @@ def test_bulk_stale_revision_rolls_back_entire_batch():
     assert old==snapshot
 
 
-def test_local_extraction_is_not_limited_to_forty_rows():
+def test_regulation_list_keeps_all_sixty_entries_in_one_content_block():
     from safety_report.project_intake import automatic_candidates
     text='\n'.join('GB '+str(50000+i)+'-2020 《专业技术标准示例条目》' for i in range(60))
     result,_=automatic_candidates({'chunks':[{'id':'e','sha256':'h','source':'资料','locator':'p1','text':text}]},[{'id':'f','name':'资料','sha256':'h','role':'source','active':True}])
-    assert len([r for r in result if r['domain']=='regulation'])==60
+    laws=[r for r in result if r['domain']=='regulation']
+    assert len(laws)==1 and laws[0]['source_quote']==text
+    assert all(str(50000+i) in laws[0]['values']['文件名称'] for i in range(60))
 
 
 def test_partial_reuse_removes_stale_missing_note_only_for_selected_heading():
@@ -78,3 +80,15 @@ def test_partial_reuse_removes_stale_missing_note_only_for_selected_heading():
     merged=pipeline.merge_subsection_revision(old,new,['1.1 批复文件'],['1.1 批复文件','1.2 标准'])
     assert merged['missing']==['1.2 标准：需补充标准清单']
     assert merged['review']==new['review']
+
+
+def test_bulk_review_saves_edited_block_and_rolls_back_if_one_block_invalid():
+    old=records();files=[{'id':'f','sha256':'h','active':True}]
+    values={**old[0]['values'],'危险因素':'触电与火灾，按原文小节统一核对。'}
+    payload={'items':[{'id':'0','revision':1,'values':values}],'reviewer':'甲','review_note':'本批次已核对','report_section':'3'}
+    new,_=bulk_review(old,payload,{'3'},files)
+    assert new[0]['values']==values and new[0]['status']=='reviewed'
+    assert old[0]['values']!=values
+    snapshot=copy.deepcopy(old)
+    with pytest.raises(ValueError):bulk_review(old,{**payload,'items':payload['items']+[{'id':'1','revision':99}]},{'3'},files)
+    assert old==snapshot

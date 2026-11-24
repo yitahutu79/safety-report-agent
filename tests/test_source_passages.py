@@ -31,3 +31,26 @@ def test_long_word_paragraph_uses_full_block_not_2200_character_chunk():
 def test_multi_sentence_word_paragraph_is_not_split_into_single_sentences():
     text='应设置安全设施，保持机械连接牢固。发生异常时及时检查。检修过程中应按照规定隔离能量，确认安全后恢复运行。'
     assert paragraph_spans({'locator':'body[1]','kind':'paragraph','text':text})==[text]
+
+
+def test_subsection_groups_list_and_continuations_with_each_source_location():
+    blocks=[{'locator':'b1','level':2,'text':'1.2 法律法规'},
+            {'locator':'b2','text':'《中华人民共和国安全生产法》：本次引用依据。'},
+            {'locator':'b3','text':'《某安全管理条例》：来源资料所列依据。'},
+            {'locator':'b4','text':'以上文件版本及执行条件以原文件记载为准。'},
+            {'locator':'b5','level':2,'text':'1.3 技术标准'},
+            {'locator':'b6','text':'GB 50016-2014 《建筑设计防火规范》'}]
+    a={'documents':[{'sha256':'h','blocks':blocks}]}
+    passages=list(extraction_passages(a,{'id':'f','name':'报告.docx','sha256':'h'}))
+    assert len(passages)==2
+    assert passages[0]['text']=='\n\n'.join(b['text'] for b in blocks[1:4])
+    assert [p['locator'] for p in passages[0]['source_spans']]==['b2','b3','b4']
+    assert 'GB 50016' not in passages[0]['text']
+    records,_=automatic_candidates(a,[{'id':'f','name':'报告.docx','sha256':'h','role':'source'}])
+    laws=[r for r in records if r['domain']=='regulation']
+    assert len(laws)==2 and laws[0]['title']=='1.2 法律法规'
+
+
+def test_unheaded_independent_paragraphs_remain_separate():
+    a={'documents':[{'sha256':'h','blocks':[{'locator':'b1','text':'设备A安全措施。'}, {'locator':'b2','text':'另一独立材料的说明。'}]}]}
+    assert len(list(extraction_passages(a,{'id':'f','name':'资料','sha256':'h'})))==2

@@ -100,7 +100,7 @@ def render_file(target, file, page=1):
 def collect_figures(target, files):
     figures, warnings = [], []
     for file in files:
-        if not file.get('active', True) or not file.get('include'):
+        if not file.get('active', True) or not file.get('include') or file.get('appendix_mode'):
             continue
         try:
             suffix = Path(file['stored']).suffix.lower()
@@ -152,3 +152,21 @@ def resolve_figure_placements(report, figures):
         figure['placement'] = location
         resolved.append(figure)
     return resolved, warnings
+
+
+def collect_original_appendices(target,files):
+    """Append every original page in order, independently of figure-page selection."""
+    pages=[]
+    for file in files:
+        if not file.get('active',True) or not file.get('appendix_mode'):continue
+        suffix=Path(file['stored']).suffix.lower()
+        if suffix=='.pdf':
+            from pypdf import PdfReader
+            count=len(PdfReader(Path(target)/'uploads'/file['stored']).pages)
+        elif suffix in RASTER:count=1
+        else:raise ValueError(file['name']+'：整份原件附录需要PDF或图片，请先转换后上传')
+        for page in range(1,count+1):
+            pages.append({'path':str(render_file(target,file,page)),'caption':file.get('caption') or file['name'],
+                          'source':file['name'],'original_appendix':True,'appendix_file_id':file['id'],
+                          'original_page':page,'original_page_count':count,'placement':{}})
+    return pages

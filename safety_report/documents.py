@@ -14,7 +14,7 @@ from .ocr import recognize_pdf_page
 
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 NS = {"w": W[1:-1]}
-PDF_PARSER_REVISION = 1
+PDF_PARSER_REVISION = 2
 
 
 def text_of(node):
@@ -50,9 +50,9 @@ def read_docx(path):
                                "text": text, "style_id": sid, "style_name": style.get("name", ""),
                                "level": int(level.get(W + "val")) + 1 if level is not None else style.get("level")})
             elif element.tag == W + "tbl":
-                rows = [[text_of(cell) for cell in row.findall("w:tc", NS)]
-                        for row in element.findall("w:tr", NS)]
-                blocks.append({"kind": "table", "locator": f"body[{index}]", "rows": rows,
+                from .table_reuse import read_table
+                rows,layout=read_table(element)
+                blocks.append({"kind": "table", "locator": f"body[{index}]", "rows": rows,"table_layout":layout,"table_has_objects":any(element.find(".//"+W+tag) is not None for tag in ("drawing","pict","object","tbl")),
                                "text": "\n".join(" | ".join(row) for row in rows)})
         sections = []
         for section in root.findall(".//w:sectPr", NS):
@@ -124,7 +124,11 @@ def parse_file(path):
         for i in range(1, len(pages) + 1):
             method = "text"
             try:
-                text = (pages[i - 1].extract_text() or "").strip()
+                try:
+                    # PDF content-stream order is not the page's reading order.
+                    text = (pages[i - 1].extract_text(extraction_mode="layout",layout_mode_space_vertically=False) or "").strip()
+                except TypeError:
+                    text = (pages[i - 1].extract_text() or "").strip()
             except Exception as exc:
                 try:
                     text = _extract_pdf_page_with_pdfium(path, i - 1)
@@ -172,7 +176,7 @@ def parse_file(path):
             if block.get("method") == "ocr":
                 chunk["method"] = "ocr"
             chunks.append(chunk)
-    return {"file": path.name, "sha256": digest, "blocks": blocks, "chunks": chunks, "warnings": warnings, **details}
+    return {"table_parser_revision":1,"file": path.name, "sha256": digest, "blocks": blocks, "chunks": chunks, "warnings": warnings, **details}
 
 
 def decode(data):

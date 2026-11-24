@@ -81,6 +81,7 @@ def analyze(paths, previous=None, on_file=lambda index, total, name: None):
                 document.get('pdf_parser_revision') != PDF_PARSER_REVISION or document.get('ocr_retry')
             ):
                 document = None
+            if document is not None and path.suffix.lower()=='.docx' and document.get('table_parser_revision')!=1:document=None
             if document is None:
                 document = parse_file(path)
             else:

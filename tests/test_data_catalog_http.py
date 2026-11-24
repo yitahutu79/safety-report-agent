@@ -54,3 +54,31 @@ def test_structured_job_and_approval_pass_only_reviewed_records_to_report(tmp_pa
     assert not state['busy'] and records[0]['status']=='draft'
     assert state['structured_coverage']['selected_chunks']==1
     assert not report_evidence(records,[file])
+
+
+def test_regroup_archives_only_pristine_fragments_keeps_reviews_and_is_idempotent(tmp_path,monkeypatch):
+    monkeypatch.setattr(server,'DATA',tmp_path)
+    http=ThreadingHTTPServer(('127.0.0.1',0),server.Handler);thread=threading.Thread(target=http.serve_forever,daemon=True);thread.start()
+    def req(path,data=None):
+        body=json.dumps(data).encode() if data is not None else None
+        with urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{http.server_port}'+path,data=body),timeout=5) as res:return json.load(res)
+    try:
+        pid=req('/api/projects',{'name':'内容块归档回归'})['id'];target=tmp_path/pid;route='/api/projects/'+pid
+        file={'id':'f','name':'报告.docx','stored':'f.docx','sha256':'h','active':True,'role':'source','document_type':'historical_design','size':1}
+        server.state_update(target,files=[file],analysis_dirty=False)
+        server.save(target/'analysis.json',{'documents':[{'sha256':'h','blocks':[{'level':2,'locator':'b1','text':'1.2 法律'}, {'locator':'b2','text':'《安全生产法》：来源列载的法律依据。'}, {'locator':'b3','text':'《安全管理条例》：来源列载的管理依据。'}]}]})
+        untouched={'id':'old','signature':'old','extraction_method':'local_pattern_candidate','status':'draft','revision':1,'history':[]}
+        edited={**untouched,'id':'edited','signature':'edited','revision':2,'history':[{'status':'draft'}]}
+        reviewed={**untouched,'id':'reviewed','signature':'reviewed','status':'reviewed','revision':2,'reviewer':'甲'}
+        server.save(target/'structured-data.json',[untouched,edited,reviewed])
+        req(route+'/structured-regroup',{})
+        records=req(route+'/structured-data')['records'];assert len(records)==3
+        assert next(r for r in records if r['id']=='edited')==edited
+        assert next(r for r in records if r['id']=='reviewed')==reviewed
+        assert server.load(target/'retired-fragment-candidates.json')==[untouched]
+        block=next(r for r in records if r.get('content_block_version'))
+        assert len(block['source_spans'])==2 and block['status']=='draft'
+        req(route+'/structured-regroup',{})
+        assert req(route+'/structured-data')['records']==records
+        assert server.load(target/'retired-fragment-candidates.json')==[untouched]
+    finally:http.shutdown();http.server_close();thread.join(timeout=5)

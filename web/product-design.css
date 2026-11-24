@@ -108,3 +108,16 @@ body{background:#f6f7f9}main{max-width:none}body[data-current-view=draft] .intro
 @media(max-width:430px){
   .workbench-topbar .breadcrumb{display:none}
 }
+
+/* Whole source subsections, compact review controls. */
+.structured-content-block{padding:18px 20px;margin:12px 0;border:1px solid var(--border,#dde3eb);border-radius:12px;background:var(--surface,#fff)}
+.structured-block-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.structured-block-heading .record-pick{display:flex;align-items:center;gap:10px;margin:0;min-width:0}.structured-status{font-size:12px;white-space:nowrap;color:#52657b;background:#f0f4fa;border-radius:20px;padding:3px 9px}
+.structured-content-block .structured-source{font-size:12px;color:#6b7789;margin:6px 0 12px}.structured-content-block>label{display:block;font-size:12px;color:#536276}.structured-content-block textarea{width:100%;margin-top:4px;line-height:1.75;resize:vertical;box-sizing:border-box}.structured-metadata,.structured-original{margin:8px 0;font-size:13px}.structured-metadata>label{display:block;margin:10px 0}.structured-original p{max-height:320px;overflow:auto}.structured-content-block>button{margin-top:4px;padding:6px 12px;font-size:12px}
+
+.original-appendix-control{grid-column:1/-1;background:#f6f8fb;padding:10px 12px;border-radius:8px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}.original-appendix-control label{display:flex;align-items:center;gap:10px;margin:0}.original-appendix-control select{min-width:250px}.original-appendix-control small{flex-basis:100%;color:#6b7789}
+
+.original-appendix-control{display:block}.original-appendix-control summary{cursor:pointer;font-size:13px}.original-appendix-control[open]>label{margin:10px 0}.original-appendix-control small{display:block;margin-top:8px}
+
+.source-table-panel{margin:16px 0;padding:14px;border:1px solid #dce4ef;border-radius:10px;background:#f8faff}.source-table-panel>select{margin:10px 0;max-width:100%}.source-table-scroll{overflow:auto;max-height:540px}.source-table-preview{border-collapse:collapse;width:100%;font-size:13px;background:white}.source-table-preview td,.source-table-preview th{border:1px solid #c9d2df;padding:9px;white-space:pre-wrap;vertical-align:middle}.source-table-preview th{background:#eff4fa}.source-table-preview textarea{width:100%;min-width:75px;box-sizing:border-box}
+
+#source-table-dialog{width:min(1280px,94vw);max-height:90vh;border:1px solid #dce4ef;border-radius:12px;padding:22px}#source-table-dialog .source-table-scroll{max-height:75vh}#source-table-dialog .source-table-preview{min-width:800px}

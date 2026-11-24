@@ -23,10 +23,11 @@ def reference_analysis(target,files,previous):
     cache={(d['sha256'],d.get('file')):d for d in previous.get('reference_documents',[])}
     documents=[];chunks=[];warnings=[]
     for file in files:
-        if file.get('active',True) and file['role']=='reference' and Path(file['name']).suffix.lower() in {'.docx','.pdf','.txt','.csv','.md','.json'}:
+        if file.get('appendix_mode')!='original' and file.get('active',True) and file['role']=='reference' and Path(file['name']).suffix.lower() in {'.docx','.pdf','.txt','.csv','.md','.json'}:
             try:
                 cached=cache.get((file['sha256'],file['stored']))
                 if cached and Path(file['name']).suffix.lower()=='.pdf' and (cached.get('pdf_parser_revision')!=PDF_PARSER_REVISION or cached.get('ocr_retry')):cached=None
+                if cached and Path(file['name']).suffix.lower()=='.docx' and cached.get('table_parser_revision')!=1:cached=None
                 document=copy.deepcopy(cached or parse_file(target/'uploads'/file['stored']))
                 attach_section_context(document)
                 for chunk in document['chunks']:
@@ -41,7 +42,7 @@ def automatic_candidates(analysis,files):
     from .source_passages import extraction_passages
     records=[];coverage=[];excluded=excluded_content_locations(analysis)
     for file in files:
-        if not file.get('active',True) or file['role']=='attachment':continue
+        if not file.get('active',True) or file['role']=='attachment' or file.get('appendix_mode')=='original':continue
         chunks=list(extraction_passages(analysis,file))
         count=0;seen=set();domain_counts={d:0 for d in DOMAINS}
         for chunk in chunks:
@@ -74,10 +75,10 @@ def automatic_candidates(analysis,files):
                     for field in ('来源阶段','计划或现场状态','建议或落实状态'):
                         if field in values:values[field]=stage
                     records.append({'id':'auto-'+signature[:24],'signature':signature,'domain':domain,'file_id':file['id'],
-                        'document_type':file.get('document_type','other'),'title':re.sub(r'\s+',' ',quote)[:70]+('…' if len(re.sub(r'\s+',' ',quote))>70 else ''),'values':values,'status':'draft','revision':1,
+                        'document_type':file.get('document_type','other'),'title':chunk.get('source_heading','').split('/')[-1] or re.sub(r'\s+',' ',quote)[:70]+('…' if len(re.sub(r'\s+',' ',quote))>70 else ''),'values':values,'status':'draft','revision':1,
                         'evidence_id':chunk['id'],'source_file':file['name'],'source_locator':chunk['locator'],
                         'source_quote':quote,'source_sha256':file['sha256'],'source_role':file['role'],
-                        'source_context':quote,'context_complete':True,'extraction_method':'local_pattern_candidate','report_section':'','reviewer':'','review_note':'','history':[]})
+                        'source_context':quote,'source_heading':chunk.get('source_heading',''),'source_spans':chunk.get('source_spans',[]),'content_block_version':1,'context_complete':True,'extraction_method':'local_pattern_candidate','report_section':'','reviewer':'','review_note':'','history':[]})
                     count+=1;domain_counts[domain]+=1
         coverage.append({'file':file['name'],'readable_chunks':len(chunks),'automatic_candidates':count,'domain_counts':domain_counts,'limit_per_domain':None,
                          'scope':'本地关键词识别的待核对候选，未调用模型；未识别不代表全文已完整提取，长正文另由完整报告复用处理'})

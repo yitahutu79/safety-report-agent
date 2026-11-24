@@ -16,7 +16,7 @@ def provided_report_draft(analysis,headings):
         file=sources.get(doc.get('sha256'))
         if not file:continue
         current=None;matched=set()
-        for block in doc.get('blocks',[]):
+        for block_order,block in enumerate(doc.get('blocks',[])):
             if block.get('level') in (1,2,3):
                 current=normalized.get(re.sub(r'\s+','',block['text']))
                 if current:matched.add(current)
@@ -28,15 +28,18 @@ def provided_report_draft(analysis,headings):
                  'evidence_type':'user_confirmed_report','report_reuse_authorized':True,'original_verified':False}
             evidence.append(ref)
             if block['kind']=='table':
+                if block.get('table_has_objects'):raise ValueError('原表包含图片或嵌套表，请转换为PDF并通过原件附录保留完整内容')
                 rows=block.get('rows',[])
                 if rows:
                     width=max(len(row) for row in rows);rows=[list(row)+['']*(width-len(row)) for row in rows]
                     caption='原报告表格'
                     if paragraphs and paragraphs[-1]['heading']==current and re.match(r'^表\s*\d',paragraphs[-1]['text']):caption=paragraphs.pop()['text']
-                    for start in range(1,max(2,len(rows)),300):
+                    step=len(rows) if block.get('table_layout') else 300
+                    for start in range(1,max(2,len(rows)),max(1,step)):
                         tables.append({'heading':current,'caption':caption+('（续）' if start>1 else ''),'headers':rows[0],
-                                       'rows':rows[start:start+300],'evidence_ids':[eid],'report_source_reused':True})
-            else:paragraphs.append({'heading':current,'text':block['text'],'evidence_ids':[eid],'report_source_reused':True})
+                                       'rows':rows[start:start+step],'source_order':block_order,'evidence_ids':[eid],'report_source_reused':True,
+                                       **({'source_table_layout':block['table_layout']} if block.get('table_layout') else {})})
+            else:paragraphs.append({'heading':current,'text':block['text'],'source_order':block_order,'evidence_ids':[eid],'report_source_reused':True})
         covered.update(matched);origins.append(file['name'])
     return {'paragraphs':paragraphs,'tables':tables,'missing':[],
             'review':['按用户确认的已有报告复用；原件真实性、法规现行性和结论适用性仍由专业人员核验。'] if covered else [],
