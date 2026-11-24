@@ -174,17 +174,19 @@ function drawReadingView(){
  const preview=$('#reading-content');if(!preview||!report)return;preview.replaceChildren();
  const section=report.sections[currentChapter];let heading='';
  for(const row of $('#paragraph-editor').querySelectorAll('.paragraph-block')){
+  if(row.hidden)continue;
   const title=row.querySelector('select').value;
   if(title&&title!==section.title&&title!==heading){preview.append(el('h4',title));heading=title;}
   preview.append(el('p',row.querySelector('textarea').value||'（空段落）'));
  }
  for(const source of $('#table-editor').querySelectorAll('.editor-table')){
+  if(source.hidden)continue;
   preview.append(el('h4',source.querySelector('h3').textContent));const wrap=el('div',undefined,'reading-table-wrap');const table=el('table');
-  for(const original of source.querySelectorAll('tr')){const tr=el('tr');for(const cell of original.children)tr.append(el(cell.tagName==='TH'?'th':'td',cell.querySelector('textarea').value));table.append(tr);}wrap.append(table);preview.append(wrap);
+  for(const original of source.querySelectorAll('tr')){const tr=el('tr');for(const cell of original.children){const copy=el(cell.tagName==='TH'?'th':'td',cell.querySelector('textarea').value);copy.rowSpan=cell.rowSpan;copy.colSpan=cell.colSpan;tr.append(copy);}table.append(tr);}wrap.append(table);preview.append(wrap);
  }
- if(!preview.children.length)preview.append(el('p','本章尚无正文。可以使用右侧编写助手生成，或切换编辑补充内容。','reading-empty'));
+ if(!preview.children.length)preview.append(el('p','当前范围暂无正文。可以使用右侧编写助手生成，或切换编辑补充内容。','reading-empty'));
  const count=[...$('#paragraph-editor').querySelectorAll('textarea')].reduce((n,x)=>n+x.value.replace(/\s/g,'').length,0);
- $('#reading-meta').textContent=count+' 字 · '+$('#table-editor').children.length+' 张表 · '+(editorDirty?'含未保存修改':'已保存版本')+' · 图件及分页以 Word 为准';
+ $('#reading-meta').textContent=count+' 字 · '+$('#table-editor').children.length+' 张表 · '+(editorDirty?'含未暂存修改':current?.has_working_report?'本轮编辑暂存，未生成版本':'已保存版本')+' · 图件及分页以 Word 为准';
 }
 function setEditorialMode(mode){editorialMode=mode;const paper=$('.chapter-paper');if(!paper)return;paper.dataset.mode=mode;for(const b of paper.querySelectorAll('.paper-mode')){b.classList.toggle('active',b.dataset.mode===mode);b.setAttribute('aria-pressed',String(b.dataset.mode===mode));}drawReadingView();}
 const editorBeforeEditorial=renderEditor;
@@ -203,7 +205,7 @@ renderEditor=function(){editorBeforeEditorial();if(!report)return;const paper=$(
  setEditorialMode(editorialMode);
 };
 $('#add-paragraph').addEventListener('click',()=>setEditorialMode('edit'));
-$('#editor-card').addEventListener('input',event=>{if(!event.target.closest('#paragraph-editor,#table-editor'))return;if($('#reading-meta'))$('#reading-meta').textContent='含未保存修改 · 保存本章后生成新版本';});
+$('#editor-card').addEventListener('input',event=>{if(!event.target.closest('#paragraph-editor,#table-editor'))return;if($('#reading-meta'))$('#reading-meta').textContent='含未暂存修改 · 本轮编辑完成后统一保存版本';});
 const editorialShowView=showView;showView=function(name){if(name!=='draft')document.body.classList.remove('editorial-focus');editorialShowView(name);};
 
 // Resume completed nodes for the same request; the user can start fresh explicitly.

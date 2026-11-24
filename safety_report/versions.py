@@ -32,6 +32,9 @@ def history(target):
 
 
 def load_report(target, ident=None):
+    if ident is None:
+        working=load_working(target)
+        if working:return copy.deepcopy(working['report'])
     directory = version_directory(target, ident) if ident else Path(target)
     path = directory / 'report.json'
     return json.loads(path.read_text(encoding='utf-8')) if path.exists() else None
@@ -128,6 +131,7 @@ def commit(target, report, export, kind='generation', description=''):
             pending = target / ('.' + name + '.tmp')
             shutil.copyfile(final / name, pending)
             pending.replace(target / name)
+        (target/'working-report.json').unlink(missing_ok=True)
         return meta
     finally:
         if temp.exists():
@@ -236,3 +240,34 @@ def apply_edits(report, changed_sections, add_chapter=None, delete_chapter_ids=N
     result['updated_chapters'] = sorted(changed)
     result['instructions'] = '使用者在页面编辑并保存章节'
     return result
+
+
+
+def load_working(target):
+    path=Path(target)/'working-report.json'
+    if not path.exists():return None
+    data=json.loads(path.read_text(encoding='utf-8'))
+    state=json.loads((Path(target)/'state.json').read_text(encoding='utf-8'))
+    if data.get('base_version','')!=state.get('report_version',''):raise ValueError('暂存编辑的基础版本已变化，请先核对历史版本')
+    return data
+
+
+def working_revision(target):
+    working=load_working(target)
+    return working['revision'] if working else 0
+
+
+def stage(target,report,expected_revision=None):
+    target=Path(target);current=working_revision(target)
+    if expected_revision is not None and current!=expected_revision:raise ValueError('编辑区已有新修改，请刷新后继续')
+    state=json.loads((target/'state.json').read_text(encoding='utf-8'))
+    data={'revision':current+1,'base_version':state.get('report_version',''),'report':copy.deepcopy(report),
+          'updated_at':datetime.now(timezone.utc).isoformat()}
+    pending=target/'.working-report.json.tmp';pending.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8');pending.replace(target/'working-report.json')
+    return {'id':data['base_version'],'working_revision':data['revision'],'staged':True}
+
+
+def save_or_commit(target,report,export,kind='edit',description='',defer_version=False):
+    if defer_version:return stage(target,report)
+    preserve_legacy(target)
+    return commit(target,report,export,kind=kind,description=description)

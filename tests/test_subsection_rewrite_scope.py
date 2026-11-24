@@ -100,7 +100,7 @@ def test_http_scoped_generation_dispatch_and_stale_version_guard(tmp_path,monkey
         assert calls[-1][0] is server.preflight_job and calls[-1][-1]==payload['subsections']
         server.state_update(target,busy=False)
         req(route+'/generate',payload)
-        assert calls[-1][0] is server.job and calls[-1][-1]==payload['subsections']
+        assert calls[-1][0] is server.job and calls[-1][-2]==payload['subsections'] and calls[-1][-1] is True
         server.state_update(target,busy=False)
         with pytest.raises(urllib.error.HTTPError):req(route+'/generate',{**payload,'base_version':'old'})
         workflow={'chapters':{'1':{'locked':True}}};server.save(target/'chapter-workflow.json',workflow)

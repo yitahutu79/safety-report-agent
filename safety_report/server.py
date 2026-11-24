@@ -582,7 +582,7 @@ def knowledge_qa_job(target, question, scope, model, cancel_event):
                 JOB_CANCELLATIONS.pop(str(target), None)
 
 
-def job(target, operation, use_llm=False, model=None, chapter_ids=None, instructions='', cancel_event=None, supplement_answers='', supplement_chapter='', subsections=None):
+def job(target, operation, use_llm=False, model=None, chapter_ids=None, instructions='', cancel_event=None, supplement_answers='', supplement_chapter='', subsections=None,defer_version=False):
     try:
         if operation == 'analyze':
             result = analyze_project(target, model)
@@ -638,10 +638,8 @@ def job(target, operation, use_llm=False, model=None, chapter_ids=None, instruct
             with project_lock(state['id']):
                 if cancel_event and cancel_event.is_set():
                     raise provider.GenerationCancelled()
-                with LOCK:
-                    versions.preserve_legacy(target)
-                meta = versions.commit(target, report, lambda r, p: export_report(target, r, p, state['files']),
-                                       description=instructions or ('智能编写' if use_llm else '编写提纲'))
+                meta = versions.save_or_commit(target, report, lambda r, p: export_report(target, r, p, state['files']),kind='generation',
+                                       description=instructions or ('智能编写' if use_llm else '编写提纲'),defer_version=defer_version)
                 message = '新版本已保存，请在下方预览、修改和导出'
                 if report.get('status') == 'in_progress':
                     message = '所选章节已保存，可继续选择下一章；未生成或失败章节在 Word 中会明确标为待完成'
@@ -649,6 +647,7 @@ def job(target, operation, use_llm=False, model=None, chapter_ids=None, instruct
                     message += '；部分章节失败，保留了原内容，可单独重试'
                 if report.get('retrieval_mode') == 'chinese_keyword_fallback':
                     message += '；语义检索未启用，本次使用关键词检索'
+                if defer_version:message='本次内容已暂存到编辑区，可继续修改或确认锁定；点击“保存本轮修改并生成版本”后才提供新下载'+('；部分小节失败，请核对' if report.get('generation_errors') else '')
                 expected = {main_heading_id(h) for h in profile['headings'] if h['level'] == 1}
                 still_outdated = state['source_changes_pending'] and chapter_ids is not None and (set(chapter_ids) != expected or bool(subsections))
                 state_update(target, busy=False, cancel_requested=False, current_operation='', stage='done', report_outdated=still_outdated, source_changes_pending=still_outdated, report_version=meta['id'], message=message, error='')
@@ -779,6 +778,7 @@ class Handler(BaseHTTPRequestHandler):
             target, action = directory(match[1]), match[2] or ''
             if action.startswith('download/'):
                 name = action.split('/', 1)[1]
+                if not query.get('version') and versions.working_revision(target) and name in {'report.docx','report.json','review.json','review.html'}:return self.json({'error':'本轮编辑尚未保存为版本，请先保存；旧版本可到版本记录下载'},409)
                 location = versions.version_directory(target, query['version'][0]) if query.get('version') else target
                 if name not in DOWNLOADS or not (location / name).is_file():
                     return self.json({'error': '文件尚未生成'}, 404)
@@ -795,6 +795,8 @@ class Handler(BaseHTTPRequestHandler):
                     chapter_workflow=load(target / 'chapter-workflow.json',{})
                     if not query.get('version'):report=ordered_report(report,chapter_workflow)
                     public = {k: v for k, v in report.items() if k != 'evidence'}
+                    public['subsection_locks']=chapter_workflow.get('subsections',{})
+                    public['_working_revision']=versions.working_revision(target) if not query.get('version') else 0
                     public['chapter_workflow']=workflow_view(report,upgrade_state(load(target / 'state.json')),chapter_workflow)
                     # Read-time check: flag stale drafts without modifying their saved snapshot.
                     view_state = upgrade_state(load(target / 'state.json'))
@@ -840,9 +842,11 @@ class Handler(BaseHTTPRequestHandler):
                     result.pop('_archived_uploads', None)
                     analysis = {} if result.get('uploads_need_reread') else load(target / 'analysis.json', {})
                     result['evidence'] = analysis.get('chunks', [])[:25]
-                    result['downloads'] = [n for n in sorted(DOWNLOADS) if (target / n).exists()]
+                    result['working_revision']=versions.working_revision(target)
+                    result['has_working_report']=result['working_revision']>0
+                    result['downloads'] = [n for n in sorted(DOWNLOADS) if (target / n).exists() and not (result['has_working_report'] and n in {'report.docx','report.json','review.json','review.html'})]
                     result['versions'] = versions.history(target)
-                    result['has_report'] = (target / 'report.json').exists()
+                    result['has_report'] = result['has_working_report'] or (target / 'report.json').exists()
                     report_for_figures = versions.load_report(target) if result['has_report'] else None
                     if report_for_figures:
                         for item in result['files']:
@@ -961,7 +965,7 @@ class Handler(BaseHTTPRequestHandler):
                         with LOCK:
                             shutil.move(str(trash), str(target))
                     return self.json({'ok': True})
-            match = re.fullmatch(r'/api/projects/([a-f0-9]{24})/(reuse-source-table|structured-regroup|structured-bulk-review|structured-extract|structured-update|outline-edit|professional-link|chapter-approval|chapter-order|assembly-check|assemble|template-content-review|template-upload|template-apply|template-reset|upload|analyze|facts|generate|preflight|materials-plan|cancel|ack-error|clear-node-progress|flow|geocode|map|files|delete-file|delete-files|edit|restore|measures|calculations|professional|rag-test|knowledge-qa)', path)
+            match = re.fullmatch(r'/api/projects/([a-f0-9]{24})/(save-working|subsection-approval|reuse-source-table|structured-regroup|structured-bulk-review|structured-extract|structured-update|outline-edit|professional-link|chapter-approval|chapter-order|assembly-check|assemble|template-content-review|template-upload|template-apply|template-reset|upload|analyze|facts|generate|preflight|materials-plan|cancel|ack-error|clear-node-progress|flow|geocode|map|files|delete-file|delete-files|edit|restore|measures|calculations|professional|rag-test|knowledge-qa)', path)
             if not match:
                 return self.json({'error': '接口不存在'}, 404)
             target, action = directory(match[1]), match[2]
@@ -1144,6 +1148,8 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError('请选择有效的章节')
                     subsection_scope=validate_subsection_scope(data,report,chapters)
                     assert_unlocked(load(target / 'chapter-workflow.json',{}),chapters)
+                    from .subsection_locks import assert_scope
+                    assert_scope(load(target/'chapter-workflow.json',{}),chapters,subsection_scope)
                     if state.get('analysis_dirty'):
                         raise ValueError('资料已变更，请先读取新增资料，再检查章节需求')
                     if not (target / 'analysis.json').exists():
@@ -1229,6 +1235,7 @@ class Handler(BaseHTTPRequestHandler):
                         data_revision=state['data_revision'] + 1, message='已补充资料；已有信息和草稿均保留')
                     return self.json({'ok': True, 'file_id': ident, 'message': '资料已接收'})
                 data = self.input_json()
+                if 'working_revision' in data and data['working_revision']!=versions.working_revision(target):raise ValueError('编辑区已有新修改，请刷新后继续，避免覆盖')
                 if action=='structured-extract':
                     from .structured_data import select_evidence
                     file=next((f for f in state['files'] if f['id']==data.get('file_id') and f.get('active',True)),None)
@@ -1242,6 +1249,26 @@ class Handler(BaseHTTPRequestHandler):
                     state_update(target,busy=True,current_operation='structured-extract',cancel_requested=False,error='',message='正在准备相关片段')
                     POOL.submit(structured_extract_job,target,file['id'],domain,model,event)
                     return self.json({'ok':True},202)
+                if action=='subsection-approval':
+                    from .subsection_locks import set_lock
+                    if data.get('base_version','')!=state.get('report_version',''):raise ValueError('报告版本已变化，请刷新')
+                    if not isinstance(data.get('locked'),bool):raise ValueError('锁定状态无效')
+                    assert_unlocked(load(target/'chapter-workflow.json',{}),[data.get('chapter_id')])
+                    workflow=load(target/'chapter-workflow.json',{})
+                    set_lock(versions.load_report(target),workflow,data.get('chapter_id'),data.get('heading'),data['locked'])
+                    save(target/'chapter-workflow.json',workflow)
+                    state_update(target,data_revision=state['data_revision']+1,message='小节确认状态已保存，未生成下载版本')
+                    return self.json({'ok':True})
+                if action=='save-working':
+                    if data.get('base_version','')!=state.get('report_version',''):raise ValueError('报告版本已变化，请刷新')
+                    working=versions.load_working(target)
+                    if not working:raise ValueError('当前没有待保存的本轮修改')
+                    report=ordered_report(working['report'],load(target/'chapter-workflow.json',{}))
+                    report['quality_review']=project_quality(target,report,state)
+                    versions.preserve_legacy(target)
+                    meta=versions.commit(target,report,lambda r,p:export_report(target,r,p,state['files']),kind='edit',description='用户确认保存本轮编辑（统一生成可下载版本）')
+                    state_update(target,report_version=meta['id'],message='本轮修改已保存为一个版本，可下载；已有历史版本保留',error='')
+                    return self.json({'ok':True,'version':meta['id']})
                 if action=='reuse-source-table':
                     from .table_reuse import source_tables,insert_source_table
                     if data.get('base_version','')!=state.get('report_version',''):raise ValueError('报告已有新版本，请刷新后再插入原表')
@@ -1251,9 +1278,10 @@ class Handler(BaseHTTPRequestHandler):
                     item=next((t for t in source_tables(target,state['files'],data.get('file_id')) if t['id']==data.get('table_id')),None)
                     if not item or item['source_table_hash']!=data.get('source_table_hash'):raise ValueError('原表或来源已变化，请刷新预览')
                     report=insert_source_table(existing,item,ident,data.get('heading',''))
+                    from .subsection_locks import assert_unchanged
+                    assert_unchanged(existing,report,load(target/'chapter-workflow.json',{}))
                     report['quality_review']=project_quality(target,report,state)
-                    versions.preserve_legacy(target)
-                    meta=versions.commit(target,report,lambda r,p:export_report(target,r,p,state['files']),kind='edit',description='直接复用原表：'+item['caption'])
+                    meta=versions.save_or_commit(target,report,lambda r,p:export_report(target,r,p,state['files']),kind='edit',description='直接复用原表：'+item['caption'],defer_version=data.get('defer_version') is True or bool(versions.working_revision(target)))
                     state_update(target,report_version=meta['id'],report_outdated=state['source_changes_pending'] or state['analysis_dirty'],message='原表已插入指定小节，未调用模型；请核对适用性',stage='done',error='')
                     return self.json({'ok':True,'version':meta['id']})
                 if action=='structured-regroup':
@@ -1304,6 +1332,8 @@ class Handler(BaseHTTPRequestHandler):
                     if data.get('operation','edit')!='add':assert_unlocked(load(target / 'chapter-workflow.json',{}),[ident])
                     existing=versions.load_report(target)
                     report,mapping=change_outline(existing or outline_report(project_profile(target,state)),data)
+                    from .subsection_locks import assert_unchanged
+                    assert_unchanged(existing,report,load(target/'chapter-workflow.json',{}))
                     old_outline=load(target / 'report-outline.json')
                     outline=outline_profile(report);prior=(old_outline or {}).get('heading_map',{})
                     outline['heading_map']={**{k:mapping.get(v,v) for k,v in prior.items()},**mapping}
@@ -1313,8 +1343,7 @@ class Handler(BaseHTTPRequestHandler):
                         if existing:
                             report['template_sha256']=project_profile(target,state)['sha256']
                             report['quality_review']=project_quality(target,report,state)
-                            versions.preserve_legacy(target)
-                            meta=versions.commit(target,report,lambda r,p:export_report(target,r,p,state['files']),kind='edit',description='人工修改目录；删除内容可从历史版本找回')
+                            meta=versions.save_or_commit(target,report,lambda r,p:export_report(target,r,p,state['files']),kind='edit',description='人工修改目录；删除内容可从历史版本找回',defer_version=data.get('defer_version') is True or bool(versions.working_revision(target)))
                     except Exception:
                         if old_outline is None:(target / 'report-outline.json').unlink(missing_ok=True)
                         else:save(target / 'report-outline.json',old_outline)
@@ -1494,6 +1523,9 @@ class Handler(BaseHTTPRequestHandler):
                     if chapters is not None and (not isinstance(chapters, list) or not chapters or any(not isinstance(n, str) or n not in allowed_chapters for n in chapters)):
                         raise ValueError('请选择要改写的章节')
                     subsection_scope=validate_subsection_scope(data,existing_report,chapters)
+                    if action=='generate':
+                        from .subsection_locks import assert_scope
+                        assert_scope(workflow,chapters,subsection_scope)
                     if subsection_scope and (action!='generate' or not use_llm):raise ValueError('小节改写仅支持智能编写')
                     if subsection_scope and data.get('base_version')!=state.get('report_version'):raise ValueError('报告已有新版本，请刷新小节选择')
                     instructions = data.get('instructions', '')
@@ -1516,8 +1548,9 @@ class Handler(BaseHTTPRequestHandler):
                     if cancel_event:
                         JOB_CANCELLATIONS[str(target)] = cancel_event
                     state_update(target, busy=True, cancel_requested=False, current_operation=action, error='', model_id=data.get('model_id', ''), message='正在读取新增资料' if action == 'analyze' else '正在生成新版本，已有草稿保留')
-                    POOL.submit(job, target, action, use_llm, model, chapters, instructions, cancel_event,
-                                supplement_answers, supplement_chapter,subsection_scope)
+                    args=[target,action,use_llm,model,chapters,instructions,cancel_event,supplement_answers,supplement_chapter,subsection_scope]
+                    if data.get('defer_version') is True or subsection_scope:args.append(True)
+                    POOL.submit(job,*args)
                     return self.json({'ok': True}, 202)
                 if action == 'facts':
                     received = data.get('fields')
@@ -1544,9 +1577,10 @@ class Handler(BaseHTTPRequestHandler):
                     assert_unlocked(load(target / 'chapter-workflow.json',{}),requested_ids)
                     report = versions.apply_edits(versions.load_report(target), data.get('sections', []),
                         data.get('add_chapter'), data.get('delete_chapter_ids')) if action == 'edit' else versions.load_report(target, data.get('version', ''))
+                    from .subsection_locks import assert_unchanged
+                    assert_unchanged(existing,report,load(target/'chapter-workflow.json',{}))
                     report['professional_links']=current_links(target,state)
                     report['quality_review'] = project_quality(target,report,state)
-                    versions.preserve_legacy(target)
                     if action == 'restore':
                         import shutil
                         previous = versions.version_directory(target, data['version'])
@@ -1558,8 +1592,8 @@ class Handler(BaseHTTPRequestHandler):
                         description = ('新增章节：' + data['add_chapter'][:150] if data.get('add_chapter') else
                                        '删除章节：' + '、'.join(data.get('delete_chapter_ids', [])) if data.get('delete_chapter_ids') else
                                        '页面编辑保存')
-                    meta = versions.commit(target, report, export, kind=action, description=description)
-                    state_update(target, report_version=meta['id'], report_outdated=state['source_changes_pending'] or state['analysis_dirty'], message='已保存为新版本，历史版本保留', stage='done', error='')
+                    meta = versions.save_or_commit(target, report, export, kind=action, description=description,defer_version=action=='edit' and (data.get('defer_version') is True or bool(versions.working_revision(target))))
+                    state_update(target, report_version=meta['id'], report_outdated=state['source_changes_pending'] or state['analysis_dirty'], message='修改已暂存编辑区，尚未生成下载版本' if meta.get('staged') else '已保存为新版本，历史版本保留', stage='done', error='')
                     return self.json({'ok': True, 'version': meta['id']})
                 if action == 'flow':
                     result = draw_flow(data.get('steps'), target)
