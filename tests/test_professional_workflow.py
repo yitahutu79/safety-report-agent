@@ -59,7 +59,7 @@ def test_preflight_includes_only_reviewed_records_for_selected_chapter(tmp_path,
         return {'requests': [], 'can_draft_now': True, 'note': ''}
     monkeypatch.setattr(server, 'plan_missing_materials', plan)
     server.chapter_materials_plan(tmp_path, '6', {'name': 'mock'})
-    assert len(received) == 1 and received[0]['reviewed_by'] == '复核人'
+    assert received and len({item['id'] for item in received}) == 1 and all(item['reviewed_by']=='复核人' for item in received)
     received.clear()
     server.chapter_materials_plan(tmp_path, '3', {'name': 'mock'})
     assert received == []

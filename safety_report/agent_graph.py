@@ -90,26 +90,8 @@ def group_subsections(headings, max_headings=3):
 
 
 def budget_groups(headings, evidence, local):
-    """Merge neighboring titles only while their relevant full excerpts fit a budget.
-
-    Uses the existing GPT Researcher BM25 adapter, not another model call.
-    Character budget is deliberately labelled as such, not as exact tokens.
-    """
-    ceiling = 2600 if local else 6500
-    groups = []
-    for family in group_subsections(headings, max_headings=2 if local else 3):
-        current = []
-        for heading in family:
-            proposed = current + [heading]
-            scores = bm25_scores(tokens(' '.join(proposed)), [tokens(e.get('text', '')) for e in evidence])
-            size = sum(len(e.get('text', '')) for e, score in zip(evidence, scores) if score > 0)
-            if current and size > ceiling:
-                groups.append(current)
-                current = []
-            current.append(heading)
-        if current:
-            groups.append(current)
-    return groups
+    """One heading per writing/review/checkpoint unit, including third-level headings."""
+    return [[h] for h in dict.fromkeys(h for h in headings if isinstance(h,str) and h.strip())]
 
 
 def merge_subsection_drafts(drafts):
@@ -281,7 +263,7 @@ def run_chapter_graph(system: str, payload: dict[str, Any], model: dict[str, Any
 
             key_state = {**state, 'payload': {**state['payload'], 'draft_group': group, 'draft_group_index': index,
                                               'completed_units': previous}, 'evidence': chapter_evidence}
-            key = checkpoint.key('draft-unit-v6', key_state) if checkpoint else None
+            key = checkpoint.key('draft-unit-v8', key_state) if checkpoint else None
             cached = checkpoint.get(key) if checkpoint else None
             if isinstance(cached, dict) and isinstance(cached.get('draft'), dict):
                 on_progress(f'已恢复小节 {index + 1}/{len(groups)}：{label}')
@@ -292,7 +274,7 @@ def run_chapter_graph(system: str, payload: dict[str, Any], model: dict[str, Any
                 query = ' '.join(group)
                 hits = [] if query in state.get('queries', []) else state['search'](query)
                 candidates = list({item['id']: item for item in chapter_evidence + hits if item.get('id')}.values())
-                scores = bm25_scores(tokens(' '.join(group)), [tokens(item.get('text', '')) for item in candidates])
+                scores = bm25_scores(tokens(' '.join(group)), [tokens(item.get('source_heading','')+' '+item.get('text', '')) for item in candidates])
                 ranked = sorted(range(len(candidates)), key=lambda i: (-scores[i], i))
                 # Retain source identity and scope metadata. Project facts and general knowledge remain distinct.
                 unit_evidence = []
@@ -334,10 +316,10 @@ def run_chapter_graph(system: str, payload: dict[str, Any], model: dict[str, Any
                     if retry:
                         on_progress(f'正在修正小节 {index + 1}/{len(groups)} 的输出检查问题')
                         retry_prompt += ('\n上一次小节输出未通过检查：' + issue +
-                                         '。请仅重写本小节并返回完整结构；四个数组 paragraphs、tables、missing、review 必须全部给出，'
+                                         '。请仅重写本小节并返回完整结构，避免重复证据和冗长编辑说明；四个数组 paragraphs、tables、missing、review 必须全部给出，'
                                          '无内容时使用空数组。不得虚构证据或遗漏必要限制。')
                     try:
-                        unit = state['complete'](retry_prompt, payload, state['model'], max_tokens=(2000 if len(group) == 1 else 3000) if local else 4000, cancel_event=state.get('cancel_event'))
+                        unit = state['complete'](retry_prompt, payload, state['model'], max_tokens=(3000 if retry else 2000) if local else (6000 if retry else 4000), cancel_event=state.get('cancel_event'))
                         unit = normalize_local_review_lists(unit, state['model'])
                         if not isinstance(unit, dict):
                             raise ValueError('未返回有效正文对象')
@@ -400,7 +382,7 @@ def run_chapter_graph(system: str, payload: dict[str, Any], model: dict[str, Any
             review_input = {'task': {'chapter': state['payload'].get('chapter', ''), 'guidelines': unit['headings'], 'writing_requirements': state['payload'].get('revision_instructions', '')},
                 'draft': unit['draft'], 'evidence': unit['evidence'], 'model': state['model'],
                 'cancel_event': state.get('cancel_event'), 'revision_notes': notes}
-            key = checkpoint.key('unit-review-v4', {'payload': {k: v for k, v in review_input.items() if k not in ('model', 'cancel_event')}}) if checkpoint else None
+            key = checkpoint.key('unit-review-v6', {'payload': {k: v for k, v in review_input.items() if k not in ('model', 'cancel_event')}}) if checkpoint else None
             cached = checkpoint.get(key) if checkpoint else None
             if isinstance(cached, dict) and isinstance(cached.get('review'), list):
                 review_result = cached
@@ -441,7 +423,7 @@ def run_chapter_graph(system: str, payload: dict[str, Any], model: dict[str, Any
             key = checkpoint.key(name, state) if checkpoint else None
             saved = checkpoint.get(key) if checkpoint else None
             if isinstance(saved, dict):
-                if name in {'retrieve', 'draft-subsections-v6'}:
+                if name in {'retrieve', 'draft-subsections-v9'}:
                     on_evidence(saved.get('evidence', []))
                 record({'kind': 'cache_hit', 'stage': name})
                 on_progress('已恢复完成的节点：' + label)
@@ -468,11 +450,11 @@ def run_chapter_graph(system: str, payload: dict[str, Any], model: dict[str, Any
     graph = StateGraph(ChapterState)
     graph.add_node('plan', checkpointed('plan-v2', '资料规划', plan))
     graph.add_node('retrieve', checkpointed('retrieve', '证据检索', retrieve))
-    graph.add_node('draft', checkpointed('draft-subsections-v6', '章节撰写', draft))
+    graph.add_node('draft', checkpointed('draft-subsections-v9', '章节撰写', draft))
     graph.add_node('curate', checkpointed('curate-v2', '资料筛选', curate))
     graph.add_node('review', checkpointed('review', '质量校验', review))
     graph.add_node('repair', checkpointed('repair', '返修准备', repair))
-    graph.add_node('model_review', checkpointed('model_review-v5', '模型审稿', model_review))
+    graph.add_node('model_review', checkpointed('model_review-v7', '模型审稿', model_review))
     graph.add_edge(START, 'plan')
     graph.add_edge('plan', 'retrieve')
     graph.add_edge('retrieve', 'curate')

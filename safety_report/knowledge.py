@@ -19,6 +19,8 @@ CATEGORIES = {
     'safety_measure': '安全措施',
     'report_rule': '报告编制规则',
     'case': '历史案例',
+    'facility': '安全设施通用知识',
+    'emergency_resource': '应急资源与组织通用知识',
 }
 STATUSES = {'draft', 'approved', 'retired'}
 FIELDS = ('category', 'title', 'content', 'source', 'source_url', 'applicability',

@@ -50,7 +50,7 @@ def test_preflight_reuses_completed_chapter_and_invalidates_changed_model(tmp_pa
     monkeypatch.setattr(server, 'PROFILE', profile)
     monkeypatch.setattr(server.versions, 'load_report', lambda target: None)
     calls=[]
-    def plan(target, chapter_id, model, event):
+    def plan(target, chapter_id, model, event, **kwargs):
         calls.append(chapter_id)
         return {'chapter_id':chapter_id,'chapter':chapter_id,'requests':[],'can_draft_now':True}
     monkeypatch.setattr(server, 'chapter_materials_plan', plan)

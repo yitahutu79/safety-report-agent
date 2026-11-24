@@ -41,6 +41,8 @@ def audit(report):
     return {'unconfirmed_fields': report.get('unconfirmed_fields', []),
         'chapters': [{'title': s['title'], 'missing': s.get('missing', []), 'review': s.get('review', [])} for s in report['sections']],
         'structure_changes': report.get('structure_changes', []),
+        'professional_links':report.get('professional_links',[]),
+        'template_reuse_records': [{'title':s['title'],'items':s.get('template_reuse_records',[])} for s in report['sections'] if s.get('template_reuse_records')],
         'figure_warnings': report.get('figure_warnings', []), 'generation_errors': report.get('generation_errors', []),
         'readability_review': '已检查摘录标记、表格原文混排和段落与引用来源的相似度；仍需人工审阅表达逻辑与专业内容' if report.get('quality_checked') else '未通过智能正文可读性检查',
         'source_review': [{'title': section['title'], 'items': section.get('source_review', [])} for section in report['sections'] if section.get('source_review')],

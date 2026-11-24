@@ -174,11 +174,11 @@ renderEditor=function(){editorBeforeEditorial();if(!report)return;const paper=$(
  setEditorialMode(editorialMode);
 };
 $('#add-paragraph').addEventListener('click',()=>setEditorialMode('edit'));
-$('#editor-card').addEventListener('input',()=>{if($('#reading-meta'))$('#reading-meta').textContent='含未保存修改 · 保存本章后生成新版本';});
+$('#editor-card').addEventListener('input',event=>{if(!event.target.closest('#paragraph-editor,#table-editor'))return;if($('#reading-meta'))$('#reading-meta').textContent='含未保存修改 · 保存本章后生成新版本';});
 const editorialShowView=showView;showView=function(name){if(name!=='draft')document.body.classList.remove('editorial-focus');editorialShowView(name);};
 
 // Resume completed nodes for the same request; the user can start fresh explicitly.
 const nodeProgressHelp=el('div',undefined,'node-progress-help');
-nodeProgressHelp.append(el('div','按章节和小节组编写：每组完成检查后暂存；失败或停止后，使用相同模型、章节和修改要求重试，可恢复已完成部分。资料或设置改变后自动重新执行；整章未通过审核时不会写入报告版本。'));
+nodeProgressHelp.append(el('div','按目录逐小节编写：每个小节独立调用模型，完成检查后暂存；失败或停止后，使用相同模型、章节和修改要求重试，可恢复已完成部分。资料或设置改变后自动重新执行；整章未通过审核时不会写入报告版本。'));
 nodeProgressHelp.append(button('清除未完成节点进度',async()=>{if(!selected)return;if(!confirm('清除后，下次生成将从头执行。已有报告、项目资料和历史版本不会删除。继续吗？'))return;await post(endpoint('clear-node-progress'),{});notify('已清除未完成节点进度');},'secondary'));
 generationDisclosure.before(nodeProgressHelp);

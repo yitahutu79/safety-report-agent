@@ -89,6 +89,6 @@ class MeasuresLedger:
                 chunks.append({'id': 'measure-' + item['id'] + '-r' + str(item['revision']),
                     'source': item['source_file'], 'locator': item['source_locator'],
                     'text': text, 'corpus': 'project_evidence', 'evidence_type': 'measure_adoption',
-                    'disposition': status, 'source_evidence_id': item['source_evidence_id'],
+                    'disposition': status, 'report_section':item['report_section'], 'source_evidence_id': item['source_evidence_id'],
                     'reviewed_by': item['reviewed_by']})
         return chunks

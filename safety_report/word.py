@@ -51,6 +51,7 @@ def image_paragraph(rid, index, width, height):
 
 
 def write_docx(report, profile, path, figures=()):
+    profile = {**profile, **report.get('template_format', {})}
     fields = report['confirmed_fields']
     project = next((f['value'] for f in fields if f['label'] == '项目名称'), '建设项目')
     company = next((f['value'] for f in fields if f['label'] == '建设单位'), '')
@@ -141,6 +142,9 @@ def write_docx(report, profile, path, figures=()):
         bold = '<w:b/>' if outline or sid == 'Title' else ''
         styles += f'<w:style w:type="paragraph" w:styleId="{sid}"><w:name w:val="{name}"/><w:basedOn w:val="Normal"/><w:pPr>{outline}{keep}<w:ind w:firstLine="0"/><w:spacing w:before="160" w:after="120"/></w:pPr><w:rPr>{bold}<w:color w:val="000000"/><w:sz w:val="{points * 2}"/></w:rPr></w:style>'
     styles += '</w:styles>'
+    if profile.get('paragraph_formats'):
+        from .report_template import apply_paragraph_formats
+        styles = apply_paragraph_formats(styles, profile['paragraph_formats'])
     content_types = '''<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/></Types>'''
     with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as archive:
         archive.writestr('[Content_Types].xml', content_types)

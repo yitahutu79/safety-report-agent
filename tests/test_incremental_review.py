@@ -26,9 +26,10 @@ def test_repair_only_failed_unit_and_cache_unchanged_review(tmp_path):
     assert 'elapsed_seconds' in metrics and 'cache_hit' in metrics
 
 
-def test_short_sibling_titles_share_call_but_large_evidence_splits():
+def test_every_heading_is_its_own_unit_for_local_and_cloud_models():
     headings=['2.1 单位','2.1.1 地址']
-    assert budget_groups(headings,[],True)==[headings]
+    assert budget_groups(headings,[],True)==[[h] for h in headings]
+    assert budget_groups(headings,[],False)==[[h] for h in headings]
     assert budget_groups(headings,[{'text':'单位地址'*1000}],True)==[[headings[0]],[headings[1]]]
 
 

@@ -14,6 +14,10 @@ _ACTIVE_LOCK = threading.Lock()
 _ACTIVE_SOCKETS = {}
 
 
+class ModelOutputTruncated(ValueError):
+    pass
+
+
 class ModelDeadlineExceeded(ValueError):
     pass
 
@@ -223,7 +227,7 @@ def complete_json(system, payload, config=None, max_tokens=8000, cancel_event=No
     if config.get('provider') == 'ollama' and host in {'localhost', '127.0.0.1', '::1'} and config['model'].lower().startswith('qwen3.5:'):
         body['reasoning_effort'] = 'none'
     if host == 'api.deepseek.com' and config['model'].lower() in {'deepseek-flash', 'deepseek-v4-pro'}:
-        if payload.get('target_subsections') or payload.get('task_type') == 'evidence_review':
+        if payload.get('target_subsections') or payload.get('task_type') in {'evidence_review','structured_extraction','materials_review'}:
             # Bounded writing/review tasks reserve the budget for visible JSON.
             body['thinking'] = {'type': 'disabled'}
         else:
@@ -244,7 +248,7 @@ def complete_json(system, payload, config=None, max_tokens=8000, cancel_event=No
             raise ValueError('模型服务在流式输出中返回错误，请稍后重试或切换模型')
         choice = result['choices'][0]
         if choice.get('finish_reason') == 'length':
-            raise ValueError('模型输出被截断，请减少选择的章节或选择更大输出容量的模型')
+            raise ModelOutputTruncated('本节点模型输出达到上限而被截断，已完成的小节保留；请重试当前任务，仍失败时可继续细分小节或调整模型输出容量')
         message = choice['message']
         if isinstance(message.get('parsed'), dict):
             return message['parsed']

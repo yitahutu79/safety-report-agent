@@ -46,3 +46,13 @@ def test_deepseek_review_uses_visible_output_budget():
         complete_json('review',{'task_type':'evidence_review'},{'base_url':'https://api.deepseek.com','model':'deepseek-v4-pro'},max_tokens=1800)
         assert req.call_count==1
         assert req.call_args.args[2]['thinking']=={'type':'disabled'}
+
+
+def test_report_register_flags_editorial_padding_not_technical_conditions():
+    from safety_report.writing_style import style_warnings, writing_guidance, chapter_writing_guidance
+    assert style_warnings({'paragraphs':[{'text':'上述信息用于界定本次设计所属项目，不替代备案文件的审查结论。'}]})
+    assert not style_warnings({'paragraphs':[{'text':'本次设计范围为一期工程，二期工程不在本次设计范围内。计算结果仅适用于已列明的储量及工况。'}]})
+    assert 'missing' in unit_writing_guidance(['1.5 项目的其他相关文件'])
+    assert '项目代码不能写成批复文号' in unit_writing_guidance(['1.1 备案文件'])
+    assert '单项直接列文件名称和编号' in chapter_writing_guidance('1 设计依据')
+    assert '安全设施设计' in writing_guidance('facility_design')

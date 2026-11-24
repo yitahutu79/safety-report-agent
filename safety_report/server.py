@@ -1,5 +1,6 @@
 import argparse
 import hashlib
+import copy
 import hmac
 from datetime import date
 from http.cookies import SimpleCookie
@@ -32,6 +33,9 @@ from .workflow_schema import SCHEMAS
 from .quality import review_report
 from .visuals import draw_flow, geocode, static_map
 from .word import write_docx
+from .document_catalog import DOCUMENT_TYPES,DOMAINS,TYPE_DOMAINS,suggest_document_type
+from .default_outlines import catalog_profile,semantic_workflows
+from .chapter_workflow import (workflow_view, set_chapter_approval, assert_unlocked, ordered_report, assembly_checks)
 from .report_types import DEFAULT_TYPE, REPORT_TYPES, report_profile
 
 ROOT = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent.parent))
@@ -79,6 +83,96 @@ def directory(pid):
     return target
 
 
+def project_profile(target, state=None):
+    state=state or upgrade_state(load(target / 'state.json'))
+    base=report_profile(state['report_type'], load(PROFILE))
+    defaults=load(target / 'default-outline.json')
+    if defaults:base={**base,**defaults,'custom_template':True}
+    custom=load(target / 'report-template.json')
+    profile={**base, **custom, 'custom_template':True, 'confirmed_structure':True} if custom else base
+    outline=load(target / 'report-outline.json')
+    if outline:
+        profile=copy.deepcopy(profile)
+        profile.update(headings=outline['headings'],custom_template=True)
+        profile['sha256']=hashlib.sha256(json.dumps({'base':profile['sha256'],'headings':outline['headings']},ensure_ascii=False,sort_keys=True).encode()).hexdigest()
+        for item in profile.get('body_blocks',[])+profile.get('table_schemas',[]):
+            item['heading']=outline.get('heading_map',{}).get(item.get('heading'),item.get('heading'))
+    reuse=load(target / 'reference-reuse.json',{})
+    active={(f['id'],f['sha256']) for f in state['files'] if f.get('active',True) and f['role']=='reference'}
+    reference_blocks=[b for b in reuse.get('body_blocks',[]) if (b.get('source_file_id'),b.get('source_sha256')) in active]
+    profile=copy.deepcopy(profile)
+    profile['body_blocks']=profile.get('body_blocks',[])+reference_blocks
+    profile['content_revision']=profile.get('content_revision',0)+reuse.get('content_revision',0)
+    return profile
+
+
+def template_compatible_report(target, profile=None):
+    report=versions.load_report(target)
+    profile=profile or project_profile(target)
+    if report and report.get('template_sha256') != profile['sha256']:
+        return None
+    return report
+
+
+def main_heading_id(heading):
+    return heading.get('id') or re.match(r'\d+',heading['text']).group()
+
+
+def project_workflows(target,state):
+    profile=project_profile(target,state)
+    if profile.get('outline_source') or profile.get('custom_template'):
+        return semantic_workflows(WORKFLOWS[state['report_type']],profile)
+    return WORKFLOWS[state['report_type']]
+
+
+def calculation_section(target,state,kind):
+    profile=project_profile(target,state)
+    if not profile.get('custom_template'):return '3 危险有害因素分析' if kind=='major_hazard' else '5 安全设施设计'
+    patterns=['重大危险源'] if kind=='major_hazard' else ['安全设施设计.*措施','防范措施','安全设施符合性','工艺.*设施']
+    for pattern in patterns:
+        for h in profile['headings']:
+            if h['level']==1 and re.search(pattern,h['text']):return main_heading_id(h)+' '+re.sub(r'^\d+\s*','',h['text'])
+    return ''
+
+
+def structured_extract_job(target,file_id,domain,model,event):
+    from .structured_data import select_evidence,extract_candidates,merge_candidates
+    try:
+        state=upgrade_state(load(target / 'state.json'))
+        file=next(f for f in state['files'] if f['id']==file_id)
+        evidence,coverage=select_evidence(load(target / 'analysis.json',{}).get('chunks',[])+load(target / 'analysis.json',{}).get('reference_chunks',[]),file,domain)
+        state_update(target,message='正在提取相关片段中的'+DOMAINS[domain]['label']+'候选')
+        candidates=extract_candidates(evidence,domain,file,model,event)
+        if event.is_set():raise provider.GenerationCancelled()
+        with project_lock(state['id']):
+            records=load(target / 'structured-data.json',[])
+            added=merge_candidates(records,candidates)
+            save(target / 'structured-data.json',records)
+            state_update(target,busy=False,current_operation='',cancel_requested=False,error='',
+                structured_coverage=coverage,message='已新增'+str(len(added))+'条待核对候选；本次仅处理相关片段，非全文完整抽取')
+    except provider.GenerationCancelled:
+        state_update(target,busy=False,current_operation='',cancel_requested=False,message='已停止结构化提取，原记录保留')
+    except Exception as exc:
+        state_update(target,busy=False,current_operation='',cancel_requested=False,error=str(exc) if isinstance(exc,ValueError) else '结构化提取未完成，原记录保留')
+    finally:
+        with LOCK:JOB_CANCELLATIONS.pop(str(target),None)
+
+
+def current_links(target,state):
+    from .professional_workspace import link_views
+    return link_views(load(target / 'professional-links.json',[]),ProfessionalLedger(target / 'professional.json',state['report_type']).list(),CalculationLedger(target / 'calculations.json').list(),MeasuresLedger(target / 'measures.json').list())
+
+
+def project_quality(target,report,state):
+    quality=review_report(report,state,MeasuresLedger(target / 'measures.json').list(),CalculationLedger(target / 'calculations.json').list(),ProfessionalLedger(target / 'professional.json',state['report_type']).list())
+    bad=[r for r in current_links(target,state) if r['status']!='可引用']
+    if bad:quality['checks'].append({'key':'linked_records','title':'专业关联记录','status':'fail','detail':'；'.join(r['source_title']+' → '+r['target_title']+'：'+r['status'] for r in bad)})
+    if bad:
+        quality['counts']['fail']+=1
+        quality['overall']='needs_review'
+    return quality
+
+
 def project_lock(pid):
     with LOCK:
         return PROJECT_LOCKS.setdefault(pid, threading.RLock())
@@ -119,6 +213,59 @@ def editable(target):
         raise ValueError('当前项目正在处理，请完成后再操作')
 
 
+def delete_project_file(target, data):
+    """Delete an uploaded copy; historical report evidence snapshots remain immutable."""
+    import shutil
+    editable(target)
+    state = upgrade_state(load(target / 'state.json'))
+    requests = data.get('files') if 'files' in data else [data]
+    if not isinstance(requests, list) or not 1 <= len(requests) <= 100:
+        raise ValueError('请选择1至100个文件')
+    selected = []
+    for request in requests:
+        if not isinstance(request, dict):
+            raise ValueError('文件选择格式无效')
+        file = next((f for f in state['files'] if f['id'] == request.get('id')), None)
+        if not file or file in selected:
+            raise ValueError('文件不存在、重复或已删除，请刷新列表')
+        if request.get('confirm_name') != file['name']:
+            raise ValueError('文件名称不匹配，未删除')
+        stored = file['stored']
+        if Path(stored).name != stored or (target / 'uploads' / stored).is_symlink():
+            raise ValueError('文件路径无效，未删除')
+        selected.append(file)
+    selected_ids = {f['id'] for f in selected}
+    digests = {f['sha256'] for f in selected}
+    names = {name for f in selected for name in (f['name'], f['stored'])}
+    analysis = load(target / 'analysis.json', {})
+    removed_ids = {c['id'] for c in analysis.get('chunks', [])
+                   if c.get('sha256') in digests or c.get('source') in names}
+    fields = state.get('fields', [])
+    for field in fields:
+        old = field.get('candidates', [])
+        kept = [c for c in old if c.get('evidence_id') not in removed_ids and c.get('source') not in names]
+        if len(kept) != len(old):
+            field.update(candidates=kept, confirmed=False, changed=True)
+            if not field.get('manual'):
+                values = list(dict.fromkeys(c['value'] for c in kept))
+                field.update(value=values[0] if len(values)==1 else '', conflict=len(values)>1)
+    remaining = [f for f in state['files'] if f['id'] not in selected_ids]
+    # Invalidate first so an interrupted cleanup cannot expose stale retrieval results.
+    state_update(target, files=remaining, fields=fields, analysis_dirty=True,
+                 source_changes_pending=True, report_outdated=(target / 'report.json').exists(),
+                 chunk_count=0, data_revision=state['data_revision']+1, preflight_result=None,
+                 message='已删除项目上传副本；请重新读取剩余资料。已有报告版本及其中引用快照保留。')
+    for name in ('analysis.json', 'node-checkpoints.json', 'preflight-checkpoints.json'):
+        (target / name).unlink(missing_ok=True)
+    if (target / 'knowledge' / 'qdrant').exists():
+        shutil.rmtree(target / 'knowledge' / 'qdrant')
+    for file in selected:
+        (target / 'uploads' / file['stored']).unlink(missing_ok=True)
+        if not any(f['sha256'] == file['sha256'] for f in remaining):
+            for image in (target / 'rendered').glob(file['sha256'] + '-*.png'):
+                image.unlink(missing_ok=True)
+
+
 def invalidate(target):
     # 旧版本保留，标记有更新；不再删除已有草稿。
     state_update(target, report_outdated=True)
@@ -135,7 +282,9 @@ def analyze_project(target, model=None):
                               'document_version': f.get('document_version', '')} for f in state['files']}
     result = analyze([target / 'uploads' / f['stored'] for f in source_files], previous,
         on_file=lambda index, total, name: state_update(target, message=f'正在读取 {index}/{total}：' + labels.get(name, name)))
+    from .project_intake import attach_section_context
     for document in result['documents']:
+        attach_section_context(document)
         label = labels.get(document['file'], document['file'])
         for chunk in document['chunks']:
             chunk['source'] = label
@@ -148,13 +297,35 @@ def analyze_project(target, model=None):
         for candidate in field['candidates']:
             candidate['source'] = labels.get(candidate['source'], candidate['source'])
     result['warnings'] = [next((message.replace(stored, name, 1) for stored, name in labels.items() if message.startswith(stored)), message) for message in result['warnings']]
-    if not result['chunks']:
-        raise ValueError('没有提取出可用文本。图片/CAD 可在图件区管理；编写正文还需要可读取的项目说明等资料')
     if model:
         try:
             result = extract_model_fields(result, model)
         except ValueError as exc:
             result['warnings'].append('智能字段提取失败，已保留常规提取与人工填写：' + str(exc))
+    from .project_intake import reference_analysis,automatic_candidates,reference_reuse_profile,available_files
+    from .structured_data import merge_candidates
+    refs,reference_chunks,reference_warnings=reference_analysis(target,state['files'],previous)
+    if not result['chunks'] and not reference_chunks:raise ValueError('没有提取出可用文本，已上传但无法读取的文件请转换或OCR')
+    result.update(reference_documents=refs,reference_chunks=reference_chunks)
+    result['warnings']+=reference_warnings
+    auto,coverage=automatic_candidates(result,state['files'])
+    from .project_intake import excluded_content_locations
+    excluded=excluded_content_locations(result)
+    structured=load(target / 'structured-data.json',[])
+    current_signatures={r['signature'] for r in auto}
+    retired=[r for r in structured if r.get('extraction_method')=='local_pattern_candidate' and r.get('status')=='draft' and r.get('revision')==1 and not r.get('history') and r.get('signature') not in current_signatures]
+    if retired:
+        save(target/'retired-fragment-candidates.json',load(target/'retired-fragment-candidates.json',[])+retired)
+        retired_ids={r['id'] for r in retired};structured=[r for r in structured if r['id'] not in retired_ids]
+    # Approved/edited records retain their original quote and audit trail; only add readable context.
+    for record in structured:
+        context=next((r['source_quote'] for r in auto if r['file_id']==record['file_id'] and r['source_locator']==record['source_locator'] and record['source_quote'] in r['source_quote']),None)
+        if context:record['source_context']=context
+    added=merge_candidates(structured,auto)
+    save(target / 'structured-data.json',structured)
+    reuse=reference_reuse_profile(result,state['files'],project_profile(target,state)['headings'],load(target / 'reference-reuse.json',{}))
+    save(target / 'reference-reuse.json',reuse)
+    result['intake_coverage']=coverage
     result['fields'] = merge_fields(state.get('fields', []), result['fields'])
     state_update(target, message='正在建立项目语义知识索引（首次会下载中文向量模型）')
     from .documents import HybridEvidenceIndex
@@ -163,10 +334,10 @@ def analyze_project(target, model=None):
         semantic_index.client.close()
     else:
         result['warnings'].append('语义索引未就绪，生成时将使用关键词检索：' + (semantic_index.semantic_error or '索引未配置'))
-    file_results = {d['sha256']: {'parsed': True, 'blocks': len(d['blocks'])} for d in result['documents']}
+    file_results = {d['sha256']: {'parsed': True, 'blocks': len(d['blocks'])} for d in result['documents']+refs}
     for file in state['files']:
         if file['sha256'] in file_results:
-            file['read_status'] = '已读取'
+            file['read_status'] = '参考正文已读取，项目适用性待确认' if file['role']=='reference' else '已读取'
         elif Path(file['name']).suffix.lower() in assets.TEXT and file['role'] == 'source':
             file['read_status'] = '未读取，请查看提示'
         else:
@@ -174,7 +345,10 @@ def analyze_project(target, model=None):
     with LOCK:
         save(target / 'analysis.json', result)
         state_update(target, fields=result['fields'], files=state['files'], warnings=result['warnings'],
-                     chunk_count=len(result['chunks']), analysis_dirty=False, stage='review')
+                     chunk_count=len(result['chunks']),reference_chunk_count=len(reference_chunks),structured_candidate_count=len(structured),
+                     reference_reuse_count=len(reuse['body_blocks']),intake_coverage=coverage,
+                     data_revision=state['data_revision']+int(bool(added or retired or reference_chunks!=previous.get('reference_chunks',[]))),
+                     report_outdated=bool(state.get('report_version')) or state['report_outdated'],analysis_dirty=False, stage='review')
     return result
 
 
@@ -189,44 +363,100 @@ def export_report(target, report, output, files):
     figures, placement_warnings = assets.resolve_figure_placements(report, figures)
     report['figure_warnings'] = warnings + placement_warnings
     state = upgrade_state(load(target / 'state.json'))
-    write_docx(report, report_profile(state['report_type'], load(PROFILE)), output, figures)
+    write_docx(report, project_profile(target, state), output, figures)
 
 
-def chapter_materials_plan(target, chapter_id, model, cancel_event=None):
-    report = versions.load_report(target)
+def validate_subsection_scope(data,report,chapter_ids):
+    scope=data.get('subsections')
+    if scope is None:return None
+    if not isinstance(scope,dict) or not scope or len(scope)>20 or not report:raise ValueError('请先生成草稿，再选择有效小节')
+    sections={main_heading_id({'id':s.get('id'),'text':s['title']}):s for s in report['sections']}
+    for ident,headings in scope.items():
+        if ident not in (chapter_ids or []) or ident not in sections or not isinstance(headings,list) or not headings or len(headings)>150 or any(not isinstance(h,str) for h in headings) or len(set(headings))!=len(headings) or any(h not in sections[ident].get('subheadings',[]) for h in headings):raise ValueError('所选小节已变化或不属于本次章节，请刷新后重新选择')
+    if set(scope)!=set(chapter_ids or []):raise ValueError('按小节改写时，每个所选章节必须指定小节')
+    if data.get('include_descendants',True):
+        import copy
+        scope=copy.deepcopy(scope)
+        for ident,targets in scope.items():
+            prefixes=[re.match(r'^\d+(?:\.\d+)*',h).group()+'.' for h in targets if re.match(r'^\d+(?:\.\d+)*',h)]
+            scope[ident]=[h for h in sections[ident]['subheadings'] if h in targets or any(h.startswith(prefix) for prefix in prefixes)]
+    return scope
+
+
+def chapter_materials_plan(target, chapter_id, model, cancel_event=None, checkpoint=None, on_progress=lambda text:None, subsection_titles=None):
+    report = template_compatible_report(target)
     section = next((item for item in (report or {}).get('sections', [])
                     if (item.get('id') or (re.match(r'\d+', item.get('title', '')).group() if re.match(r'\d+', item.get('title', '')) else '')) == chapter_id), None)
     if not section:
         state = upgrade_state(load(target / 'state.json'))
-        profile = report_profile(state['report_type'], load(PROFILE))
-        heading = next((h for h in profile['headings'] if h['level'] == 1 and re.match(r'\d+', h['text']).group() == chapter_id), None)
+        profile = project_profile(target, state)
+        heading = next((h for h in profile['headings'] if h['level'] == 1 and main_heading_id(h) == chapter_id), None)
         if not heading:
             raise ValueError('当前模板中没有找到所选章节')
-        section = {'title': heading['text'], 'subheadings': [h['text'] for h in profile['headings'] if re.match(rf'^{re.escape(chapter_id)}\.', h['text'])], 'missing': [], 'review': []}
+        section = {'title': heading['text'], 'subheadings': heading.get('subheadings') or [h['text'] for h in profile['headings'] if re.match(rf'^{re.escape(chapter_id)}\.', h['text'])], 'missing': [], 'review': []}
     chunks = load(target / 'analysis.json', {}).get('chunks', [])
-    used_ids = set()
-    for item in section.get('paragraphs', []) + section.get('tables', []) + section.get('editorial_plan', []):
-        used_ids.update(item.get('evidence_ids', []))
-    query = ' '.join([section['title']] + section.get('subheadings', []) +
-                     section.get('missing', [])[:12] + section.get('review', [])[:8])
-    selected = [item for item in chunks if item.get('id') in used_ids] + retrieve(chunks, query, limit=16)
     state = upgrade_state(load(target / 'state.json'))
     professional = ProfessionalLedger(target / 'professional.json', state['report_type']).report_evidence()
     relevant = [item for item in professional if item.get('report_section') == chapter_id]
-    evidence = list({item['id']: item for item in relevant + selected}.values())[:16]
-    options = {'cancel_event': cancel_event}
-    if state['report_type'] != DEFAULT_TYPE:
-        options['report_name'] = REPORT_TYPES[state['report_type']]['name']
-    result = plan_missing_materials(section['title'], section, evidence, model, **options)
-    return {'chapter_id': chapter_id, 'chapter': section['title'], **result}
+    from .structured_data import report_evidence as structured_evidence
+    from .project_intake import available_files,SectionEvidenceIndex
+    analysis=load(target/'analysis.json',{})
+    from .report_source import confirmed_sources,provided_report_draft
+    analysis['confirmed_report_sources']=confirmed_sources(state['files'])
+    inventory=available_files(state['files'],analysis)
+    relevant+= [e for e in structured_evidence(load(target/'structured-data.json',[]),state['files']) if e.get('report_section')==chapter_id]
+    intake_index=SectionEvidenceIndex(chunks+analysis.get('reference_chunks',[]))
+    headings=list(dict.fromkeys(section.get('subheadings',[]) or [section['title']]))
+    if subsection_titles:headings=[h for h in headings if h in subsection_titles]
+    results=[]
+    for index,heading in enumerate(headings,1):
+        if cancel_event is not None and cancel_event.is_set():raise provider.GenerationCancelled()
+        on_progress(f'资料检查小节 {index}/{len(headings)}：{heading}')
+        provided=provided_report_draft(analysis,[heading])
+        if provided['covered_headings']:
+            results.append({'requests':[],'can_draft_now':True,'note':'该小节已有用户确认的报告内容，原件核验列入审阅清单，不阻挡编写'})
+            continue
+        unit={**section,'subheadings':[heading],'available_files':inventory,
+              'confirmed_fields':[{k:f.get(k) for k in ('label','value')} for f in state.get('fields',[]) if f.get('confirmed') and f.get('value')],
+              'retrieval_scope':{'project_chunks':len(chunks),'reference_chunks':len(analysis.get('reference_chunks',[])),'note':'本次仅提供相关片段；未提供不代表资料不存在'}}
+        for field in ('paragraphs','tables','editorial_plan'):
+            unit[field]=[item for item in section.get(field,[]) if item.get('heading')==heading]
+        used={eid for item in unit['paragraphs']+unit['tables'] for eid in item.get('evidence_ids',[])}
+        selected=[item for item in chunks if item.get('id') in used]+intake_index.search(heading,limit=8)
+        evidence=[];chars=0
+        for item in {item['id']:item for item in relevant+selected}.values():
+            size=len(item.get('text',''))
+            if len(evidence)>=6 or chars+size>6000:continue
+            evidence.append(item);chars+=size
+        key=checkpoint.key('materials-subsection-v1',{'payload':{'chapter':chapter_id,'heading':heading}}) if checkpoint else None
+        result=checkpoint.get(key) if checkpoint else None
+        if result is None:
+            options={'cancel_event':cancel_event}
+            if state['report_type']!=DEFAULT_TYPE:options['report_name']=REPORT_TYPES[state['report_type']]['name']
+            try:result=plan_missing_materials(section['title'],unit,evidence,model,**options)
+            except provider.ModelOutputTruncated as exc:raise ValueError('资料检查小节“'+heading+'”未完成：'+str(exc)) from exc
+            if cancel_event is not None and cancel_event.is_set():raise provider.GenerationCancelled()
+            if checkpoint:checkpoint.put(key,result)
+        else:on_progress(f'已恢复资料检查小节 {index}/{len(headings)}：{heading}')
+        results.append(result)
+    requests=[];seen=set()
+    for result in results:
+        for item in result.get('requests',[]):
+            signature=json.dumps(item,ensure_ascii=False,sort_keys=True)
+            if signature not in seen:requests.append(item);seen.add(signature)
+    return {'chapter_id':chapter_id,'chapter':section['title'],'requests':requests,
+            'can_draft_now':all(result.get('can_draft_now',False) for result in results),
+            'note':'；'.join(dict.fromkeys(result.get('note','') for result in results if result.get('note'))),
+            'checked_subsections':len(headings)}
 
 
-def preflight_job(target, chapter_ids, model, cancel_event):
+def preflight_job(target, chapter_ids, model, cancel_event, subsections=None):
     try:
+        from .report_source import confirmed_sources
         state = upgrade_state(load(target / 'state.json'))
-        scope = {'analysis': load(target / 'analysis.json'), 'fields': state['fields'],
+        scope = {'subsections':subsections,'confirmed_report_sources':confirmed_sources(state['files']),'strategy':'confirmed-report-v3','analysis': load(target / 'analysis.json'), 'fields': state['fields'],
                  'report_type': state['report_type'], 'report': versions.load_report(target),
-                 'profile': load(PROFILE), 'model': model, 'date': date.today().isoformat(),
+                 'profile': project_profile(target, state), 'model': model, 'date': date.today().isoformat(),
                  'professional': ProfessionalLedger(target / 'professional.json', state['report_type']).report_evidence()}
         checkpoint = NodeCheckpoint(target / 'preflight-checkpoints.json', scope)
         plans = []
@@ -239,7 +469,7 @@ def preflight_job(target, chapter_ids, model, cancel_event):
                 state_update(target, message=f'已恢复资料检查 {index}/{len(chapter_ids)}')
             else:
                 state_update(target, message=f'正在检查资料需求 {index}/{len(chapter_ids)}')
-                plan = chapter_materials_plan(target, chapter_id, model, cancel_event)
+                plan = chapter_materials_plan(target, chapter_id, model, cancel_event,checkpoint=checkpoint,on_progress=lambda text:state_update(target,message=text),**({'subsection_titles':subsections[chapter_id]} if subsections else {}))
                 if cancel_event.is_set():
                     raise provider.GenerationCancelled()
                 checkpoint.put(key, plan)
@@ -297,7 +527,7 @@ def knowledge_qa_job(target, question, scope, model, cancel_event):
                 JOB_CANCELLATIONS.pop(str(target), None)
 
 
-def job(target, operation, use_llm=False, model=None, chapter_ids=None, instructions='', cancel_event=None, supplement_answers='', supplement_chapter=''):
+def job(target, operation, use_llm=False, model=None, chapter_ids=None, instructions='', cancel_event=None, supplement_answers='', supplement_chapter='', subsections=None):
     try:
         if operation == 'analyze':
             result = analyze_project(target, model)
@@ -309,23 +539,29 @@ def job(target, operation, use_llm=False, model=None, chapter_ids=None, instruct
                 analyze_project(target)
                 state = upgrade_state(load(target / 'state.json'))
             analysis = load(target / 'analysis.json')
+            from .report_source import confirmed_sources
+            analysis['confirmed_report_sources']=confirmed_sources(state['files'])
             if not analysis:
                 raise ValueError('请先读取资料')
             validate_ready(state['fields'])
-            previous = versions.load_report(target)
-            profile = report_profile(state['report_type'], load(PROFILE))
+            profile = project_profile(target, state)
+            previous = template_compatible_report(target, profile)
             measure_evidence = MeasuresLedger(target / 'measures.json').report_evidence()
             calculation_evidence = CalculationLedger(target / 'calculations.json').report_evidence()
             professional_evidence = ProfessionalLedger(target / 'professional.json', state['report_type']).report_evidence()
+            from .structured_data import report_evidence as structured_evidence
+            professional_evidence+=structured_evidence(load(target / 'structured-data.json',[]),state['files'])
+            from .professional_workspace import apply_links_to_evidence
+            linked_views=apply_links_to_evidence(calculation_evidence+measure_evidence,load(target / 'professional-links.json',[]),ProfessionalLedger(target / 'professional.json',state['report_type']).list(),CalculationLedger(target / 'calculations.json').list(),MeasuresLedger(target / 'measures.json').list())
             kb_path = DATA / 'knowledge-base.json'
             kb_digest = hashlib.sha256(kb_path.read_bytes()).hexdigest() if kb_path.exists() else ''
             # A checkpoint belongs to this exact request, project state, KB revision and model.
             # The API key contributes only to a one-way digest and is never saved in the checkpoint.
             scope = {'analysis': analysis, 'fields': state['fields'], 'profile': profile, 'previous': previous,
-                     'model': model, 'chapters': chapter_ids, 'instructions': instructions,
+                     'model': model, 'chapters': chapter_ids, 'subsections':subsections,'instructions': instructions,
                      'supplement_answers': supplement_answers, 'supplement_chapter': supplement_chapter,
                      'measures': measure_evidence, 'calculations': calculation_evidence,
-                     'professional': professional_evidence, 'knowledge': kb_digest, 'date': date.today().isoformat()}
+                     'professional': professional_evidence, 'linked_records':linked_views, 'knowledge': kb_digest, 'date': date.today().isoformat()}
             node_checkpoint = NodeCheckpoint(target / 'node-checkpoints.json', scope) if use_llm else None
             report = generate(profile, analysis, state['fields'], use_llm,
                 lambda text: state_update(target, message=text), model=model, previous=previous,
@@ -335,16 +571,15 @@ def job(target, operation, use_llm=False, model=None, chapter_ids=None, instruct
                 supplement_answers=supplement_answers, supplement_chapter=supplement_chapter,
                 knowledge_retriever=knowledge_base().search,
                 measure_evidence=measure_evidence, calculation_evidence=calculation_evidence,
-                professional_evidence=professional_evidence, node_checkpoint=node_checkpoint)
+                professional_evidence=professional_evidence, node_checkpoint=node_checkpoint,subsections=subsections)
             if cancel_event and cancel_event.is_set():
                 raise provider.GenerationCancelled()
+            report=ordered_report(report,load(target / 'chapter-workflow.json',{}))
             report['source_revision'] = state['data_revision']
             report['attachments'] = [{k: f.get(k, '') for k in ('name', 'sha256', 'role', 'include', 'pages', 'caption', 'status',
                 'document_type', 'document_source', 'document_date', 'document_version', 'figure_placement')} for f in state['files'] if f.get('active', True)]
-            report['quality_review'] = review_report(report, state,
-                MeasuresLedger(target / 'measures.json').list(),
-                CalculationLedger(target / 'calculations.json').list(),
-                ProfessionalLedger(target / 'professional.json', state['report_type']).list())
+            report['professional_links']=current_links(target,state)
+            report['quality_review'] = project_quality(target,report,state)
             with project_lock(state['id']):
                 if cancel_event and cancel_event.is_set():
                     raise provider.GenerationCancelled()
@@ -359,8 +594,8 @@ def job(target, operation, use_llm=False, model=None, chapter_ids=None, instruct
                     message += '；部分章节失败，保留了原内容，可单独重试'
                 if report.get('retrieval_mode') == 'chinese_keyword_fallback':
                     message += '；语义检索未启用，本次使用关键词检索'
-                expected = {re.match(r'\d+', h['text']).group() for h in profile['headings'] if h['level'] == 1}
-                still_outdated = state['source_changes_pending'] and chapter_ids is not None and set(chapter_ids) != expected
+                expected = {main_heading_id(h) for h in profile['headings'] if h['level'] == 1}
+                still_outdated = state['source_changes_pending'] and chapter_ids is not None and (set(chapter_ids) != expected or bool(subsections))
                 state_update(target, busy=False, cancel_requested=False, current_operation='', stage='done', report_outdated=still_outdated, source_changes_pending=still_outdated, report_version=meta['id'], message=message, error='')
                 if node_checkpoint:
                     node_checkpoint.clear()
@@ -424,7 +659,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             parsed = urlsplit(self.path)
             path, query = parsed.path, parse_qs(parsed.query)
-            static = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8'), '/experience.css': ('experience.css', 'text/css; charset=utf-8'), '/product-design.css': ('product-design.css', 'text/css; charset=utf-8'), '/product-design.js': ('product-design.js', 'text/javascript; charset=utf-8'), '/brand-mark.svg': ('brand-mark.svg', 'image/svg+xml'), '/manifest.webmanifest': ('manifest.webmanifest', 'application/manifest+json')}
+            static = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8'), '/experience.css': ('experience.css', 'text/css; charset=utf-8'), '/product-design.css': ('product-design.css', 'text/css; charset=utf-8'), '/product-design.js': ('product-design.js', 'text/javascript; charset=utf-8'), '/workspace-upgrades.js': ('workspace-upgrades.js','text/javascript; charset=utf-8'), '/brand-mark.svg': ('brand-mark.svg', 'image/svg+xml'), '/manifest.webmanifest': ('manifest.webmanifest', 'application/manifest+json')}
             if path in static:
                 name, mime = static[path]
                 return self.send_bytes(200, (ROOT / 'web' / name).read_bytes(), mime)
@@ -446,8 +681,10 @@ class Handler(BaseHTTPRequestHandler):
                     'image_ready': bool(importlib.util.find_spec('PIL')), 'pdf_render_ready': bool(importlib.util.find_spec('pypdfium2')),
                     'template': {key: load(PROFILE)[key] for key in ('table_count', 'image_resources')}, 'version': '0.9.0'})
             if path == '/api/template':
-                profile = report_profile(query.get('report_type', [DEFAULT_TYPE])[0], load(PROFILE))
-                return self.json({key: profile[key] for key in ('headings', 'report_type', 'report_name', 'confirmed_structure')})
+                profile = project_profile(directory(query['project_id'][0])) if query.get('project_id') else report_profile(query.get('report_type', [DEFAULT_TYPE])[0], load(PROFILE))
+                return self.json({**{key: profile[key] for key in ('headings', 'report_type', 'report_name', 'confirmed_structure', 'sha256')},'outline_source':profile.get('outline_source','系统原有大纲'),'guidance':profile.get('guidance','')})
+            if path == '/api/document-catalog':
+                return self.json({'document_types':DOCUMENT_TYPES,'domains':DOMAINS,'type_domains':TYPE_DOMAINS})
             if path == '/api/report-types':
                 return self.json({'types': [{'id': ident, 'name': info['name'], 'confirmed_structure': info['confirmed_structure']}
                                              for ident, info in REPORT_TYPES.items()]})
@@ -481,22 +718,33 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json({'error': '文件尚未生成'}, 404)
                 mime = mimetypes.guess_type(name)[0] or 'application/octet-stream'
                 return self.send_bytes(200, (location / name).read_bytes(), mime, {'Content-Disposition': f'attachment; filename="{name}"'})
+            if action == 'report-template-content':
+                custom=project_profile(target)
+                return self.json({'blocks':custom.get('body_blocks',[]),'content_revision':custom.get('content_revision',0),'headings':custom.get('headings',[])})
             if action == 'report':
                 with LOCK:
                     report = versions.load_report(target, query.get('version', [None])[0])
                     if not report:
                         return self.json({'report': None})
+                    chapter_workflow=load(target / 'chapter-workflow.json',{})
+                    if not query.get('version'):report=ordered_report(report,chapter_workflow)
                     public = {k: v for k, v in report.items() if k != 'evidence'}
+                    public['chapter_workflow']=workflow_view(report,upgrade_state(load(target / 'state.json')),chapter_workflow)
                     # Read-time check: flag stale drafts without modifying their saved snapshot.
                     view_state = upgrade_state(load(target / 'state.json'))
-                    view_review = review_report(report, view_state, MeasuresLedger(target / 'measures.json').list(), CalculationLedger(target / 'calculations.json').list(), ProfessionalLedger(target / 'professional.json', view_state['report_type']).list())
+                    view_review = project_quality(target,report,view_state)
                     public['quality_review'] = view_review
                     public['quality_review_scope'] = '查看时复核（含当前台账）；不覆盖历史版本审核快照'
                     return self.json({'report': public, 'version': load(target / 'state.json').get('report_version', '')})
+            if action == 'structured-data':
+                return self.json({'records':load(target / 'structured-data.json',[]),'coverage':load(target / 'state.json').get('structured_coverage'),'intake_coverage':load(target / 'state.json').get('intake_coverage',[])})
+            if action == 'professional-workspace':
+                state=upgrade_state(load(target / 'state.json'))
+                return self.json({'professional':ProfessionalLedger(target / 'professional.json',state['report_type']).list(),'calculations':CalculationLedger(target / 'calculations.json').list(),'measures':MeasuresLedger(target / 'measures.json').list(),'links':current_links(target,state)})
             if action == 'professional':
                 state = upgrade_state(load(target / 'state.json'))
                 return self.json({'items': ProfessionalLedger(target / 'professional.json', state['report_type']).list(),
-                                  'kinds': WORKFLOWS[state['report_type']], 'schemas': SCHEMAS[state['report_type']]})
+                                  'kinds': project_workflows(target,state), 'schemas': SCHEMAS[state['report_type']]})
             if action == 'measures':
                 return self.json({'items': MeasuresLedger(target / 'measures.json').list()})
             if action == 'calculations':
@@ -610,6 +858,8 @@ class Handler(BaseHTTPRequestHandler):
                 pid = secrets.token_hex(12)
                 target = DATA / pid
                 (target / 'uploads').mkdir(parents=True)
+                default=catalog_profile(ROOT,report_type)
+                if default:save(target / 'default-outline.json',default)
                 state = upgrade_state({'id': pid, 'name': name, 'report_type': report_type, 'stage': 'upload', 'busy': False, 'message': '请上传项目资料',
                     'files': [], 'fields': [], 'warnings': [], 'updated_at': time.time(), 'chunk_count': 0})
                 save(target / 'state.json', state)
@@ -638,7 +888,7 @@ class Handler(BaseHTTPRequestHandler):
                         with LOCK:
                             shutil.move(str(trash), str(target))
                     return self.json({'ok': True})
-            match = re.fullmatch(r'/api/projects/([a-f0-9]{24})/(upload|analyze|facts|generate|preflight|materials-plan|cancel|ack-error|clear-node-progress|flow|geocode|map|files|edit|restore|measures|calculations|professional|rag-test|knowledge-qa)', path)
+            match = re.fullmatch(r'/api/projects/([a-f0-9]{24})/(structured-bulk-review|structured-extract|structured-update|outline-edit|professional-link|chapter-approval|chapter-order|assembly-check|assemble|template-content-review|template-upload|template-apply|template-reset|upload|analyze|facts|generate|preflight|materials-plan|cancel|ack-error|clear-node-progress|flow|geocode|map|files|delete-file|delete-files|edit|restore|measures|calculations|professional|rag-test|knowledge-qa)', path)
             if not match:
                 return self.json({'error': '接口不存在'}, 404)
             target, action = directory(match[1]), match[2]
@@ -705,10 +955,11 @@ class Handler(BaseHTTPRequestHandler):
                 if action == 'professional':
                     data = self.input_json()
                     ident = data.pop('id', '')
-                    section = str(data.get('report_section', '')).strip() or WORKFLOWS[state['report_type']].get(data.get('kind'), ('', ''))[1]
-                    allowed = {re.match(r'\d+', h['text']).group() for h in report_profile(state['report_type'], load(PROFILE))['headings'] if h['level'] == 1}
+                    section = str(data.get('report_section', '')).strip() or project_workflows(target,state).get(data.get('kind'), ('', ''))[1]
+                    allowed = {main_heading_id(h) for h in project_profile(target, state)['headings'] if h['level'] == 1}
                     if section not in allowed:
                         raise ValueError('报告主章节编号不在当前模板中')
+                    data['report_section']=section
                     item = ProfessionalLedger(target / 'professional.json', state['report_type']).save(data, ident or None)
                     state_update(target, data_revision=state['data_revision'] + 1, source_changes_pending=True,
                                  report_outdated=state['report_outdated'] or bool(state.get('report_version')), message='专业记录已保存；请更新受影响章节')
@@ -739,7 +990,7 @@ class Handler(BaseHTTPRequestHandler):
                             candidates.append(ledger.save({'recommendation': text, 'source_file': source['source'],
                                 'source_locator': source['locator'], 'source_evidence_id': ids[0],
                                 'disposition': 'pending', 'design_response': '',
-                                'report_section': str(candidate.get('section_hint', '4 安全对策措施采纳情况'))[:160], 'reviewed_by': ''}))
+                                'report_section': next((h['text'] for h in project_profile(target,state)['headings'] if h['level']==1 and '采纳' in h['text']), ''), 'reviewed_by': ''}))
                         return self.json({'items': candidates, 'count': len(candidates)})
                     ident = data.pop('id', '')
                     return self.json({'item': ledger.save(data, ident or None)})
@@ -776,7 +1027,7 @@ class Handler(BaseHTTPRequestHandler):
                             'rule_validity_status': 'unknown', 'rule_checked_date': '',
                             'formula': result['formula'], 'steps': result['steps'], 'result': result['result'],
                             'result_unit': result['result_unit'], 'assumptions': result['assumptions'],
-                            'reviewer': '', 'review_note': '', 'report_section': '5 安全设施设计'})
+                            'reviewer': '', 'review_note': '', 'report_section':calculation_section(target,state,'fire_water' if water else 'pressure_relief_area')})
                         return self.json({'item': record, 'calculation': result})
                     if data.get('operation') == 'calculate_major_hazard':
                         result = calculate_major_hazard_indicator(data.get('unit_name'), data.get('unit_source_file'),
@@ -788,7 +1039,7 @@ class Handler(BaseHTTPRequestHandler):
                             'rule_validity_status': 'unknown', 'rule_checked_date': '',
                             'formula': result['formula'], 'steps': result['steps'], 'result': result['indicator'],
                             'result_unit': result['result_unit'], 'assumptions': result['assumptions'], 'reviewer': '',
-                            'review_note': '', 'report_section': '3 危险有害因素分析'})
+                            'review_note': '', 'report_section':calculation_section(target,state,'major_hazard')})
                         return self.json({'item': record, 'calculation': result})
                     ident = data.pop('id', '')
                     known_evidence = {item.get('id') for item in analysis.get('chunks', [])}
@@ -810,12 +1061,14 @@ class Handler(BaseHTTPRequestHandler):
                 if action == 'preflight':
                     data = self.input_json()
                     chapters = data.get('chapter_ids')
-                    report = versions.load_report(target)
+                    report = template_compatible_report(target)
                     allowed = {item.get('id') or (re.match(r'\d+', item.get('title', '')).group() if re.match(r'\d+', item.get('title', '')) else '')
                                for item in report.get('sections', [])} if report else {
-                                   re.match(r'\d+', h['text']).group() for h in report_profile(state['report_type'], load(PROFILE))['headings'] if h['level'] == 1}
+                                   main_heading_id(h) for h in project_profile(target, state)['headings'] if h['level'] == 1}
                     if not isinstance(chapters, list) or not chapters or len(chapters) > 20 or any(not isinstance(c, str) or c not in allowed for c in chapters) or len(set(chapters)) != len(chapters):
                         raise ValueError('请选择有效的章节')
+                    subsection_scope=validate_subsection_scope(data,report,chapters)
+                    assert_unlocked(load(target / 'chapter-workflow.json',{}),chapters)
                     if state.get('analysis_dirty'):
                         raise ValueError('资料已变更，请先读取新增资料，再检查章节需求')
                     if not (target / 'analysis.json').exists():
@@ -826,8 +1079,53 @@ class Handler(BaseHTTPRequestHandler):
                         JOB_CANCELLATIONS[str(target)] = event
                     state_update(target, busy=True, cancel_requested=False, current_operation='preflight',
                                  preflight_result=None, error='', message='正在准备资料检查')
-                    POOL.submit(preflight_job, target, chapters, model, event)
+                    POOL.submit(preflight_job, target, chapters, model, event,subsection_scope)
                     return self.json({'ok': True}, 202)
+                if action == 'template-upload':
+                    from .report_template import parse_report_template
+                    filename=parse_qs(parsed.query).get('name',[''])[0].replace('\\','/').rsplit('/',1)[-1]
+                    if not filename.lower().endswith('.docx') or len(filename)>180:
+                        raise ValueError('报告模板请上传 .docx 文件，旧版 .doc 请先另存为 .docx')
+                    content=self.body(20_000_000)
+                    folder=target / 'templates';folder.mkdir(exist_ok=True)
+                    temporary=folder / 'upload.docx'
+                    try:
+                        temporary.write_bytes(content)
+                        candidate=parse_report_template(temporary)
+                        candidate['name']=filename
+                        candidate['body_count']=len(candidate.get('body_blocks',[]))
+                        temporary.replace(folder / 'candidate.docx')
+                        save(folder / 'candidate.json',candidate)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+                    return self.json({'candidate':{k:v for k,v in candidate.items() if k not in {'paragraph_formats','body_blocks'}}})
+                if action in {'template-apply','template-reset'}:
+                    from .report_template import validate_headings
+                    data=self.input_json()
+                    if action=='template-apply':
+                        candidate=load(target / 'templates' / 'candidate.json')
+                        if not candidate or data.get('sha256')!=candidate['sha256']:
+                            raise ValueError('模板预览已变化，请重新上传并确认')
+                        headings=data.get('headings');validate_headings(headings)
+                        candidate['headings']=headings
+                        candidate['body_blocks']=[b for b in candidate.get('body_blocks',[]) if b['heading'] in {h['text'] for h in headings}]
+                        candidate['table_schemas']=[t for t in candidate.get('table_schemas',[]) if t.get('heading') in {h['text'] for h in headings}]
+                        candidate['source_sha256']=candidate['sha256']
+                        candidate['sha256']=hashlib.sha256(json.dumps(candidate,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
+                        save(target / 'report-template.json',candidate)
+                        state['report_template']={k:candidate[k] for k in ('name','sha256','headings','limitations')}
+                    else:
+                        (target / 'report-template.json').unlink(missing_ok=True)
+                        default=catalog_profile(ROOT,state['report_type'])
+                        if default:save(target / 'default-outline.json',default)
+                        state['report_template']=None
+                    (target / 'report-outline.json').unlink(missing_ok=True)
+                    for name in ('node-checkpoints.json','preflight-checkpoints.json'):
+                        (target / name).unlink(missing_ok=True)
+                    state_update(target,report_template=state['report_template'],outline_revision=state.get('outline_revision',0)+1,preflight_result=None,
+                        report_outdated=bool(state.get('report_version')),data_revision=state['data_revision']+1,
+                        message='报告模板已更新。下一次生成采用新目录；已有版本保留。')
+                    return self.json({'ok':True})
                 if action == 'upload':
                     query = parse_qs(parsed.query)
                     filename = query.get('name', [''])[0].replace('\\', '/').rsplit('/', 1)[-1]
@@ -849,13 +1147,126 @@ class Handler(BaseHTTPRequestHandler):
                     stored = ident + '_' + filename
                     (target / 'uploads' / stored).write_bytes(data)
                     state['files'].append({'id': ident, 'name': filename, 'stored': stored, 'size': len(data), 'sha256': digest, 'active': True,
-                        'document_type': 'other', 'document_source': '', 'document_date': '', 'document_version': '', **info})
+                        'document_type': suggest_document_type(filename), 'document_source': '', 'document_date': '', 'document_version': '', **info})
                     state_update(target, files=state['files'], analysis_dirty=state['analysis_dirty'] or info['role'] == 'source',
                         report_outdated=(target / 'report.json').exists() or (target / 'report.docx').exists(),
                         source_changes_pending=state['source_changes_pending'] or info['role'] == 'source',
                         data_revision=state['data_revision'] + 1, message='已补充资料；已有信息和草稿均保留')
                     return self.json({'ok': True, 'file_id': ident, 'message': '资料已接收'})
                 data = self.input_json()
+                if action=='structured-extract':
+                    from .structured_data import select_evidence
+                    file=next((f for f in state['files'] if f['id']==data.get('file_id') and f.get('active',True)),None)
+                    domain=data.get('domain')
+                    if not file or domain not in DOMAINS:raise ValueError('请选择有效的文件及数据类别')
+                    if state.get('analysis_dirty') or not (target / 'analysis.json').exists():raise ValueError('请先读取新增资料，再提取结构化候选')
+                    evidence,coverage=select_evidence(load(target / 'analysis.json').get('chunks',[])+load(target / 'analysis.json').get('reference_chunks',[]),file,domain)
+                    if not evidence:raise ValueError('该文件没有可读取文字；扫描件需先OCR，图纸原图仍需图纸识别或人工核对')
+                    model=settings.resolve(DATA,data.get('model_id'));event=threading.Event()
+                    JOB_CANCELLATIONS[str(target)]=event
+                    state_update(target,busy=True,current_operation='structured-extract',cancel_requested=False,error='',message='正在准备相关片段')
+                    POOL.submit(structured_extract_job,target,file['id'],domain,model,event)
+                    return self.json({'ok':True},202)
+                if action=='structured-bulk-review':
+                    from .structured_data import bulk_review
+                    records,changed=bulk_review(load(target/'structured-data.json',[]),data,{main_heading_id(h) for h in project_profile(target,state)['headings'] if h['level']==1},state['files'])
+                    save(target/'structured-data.json',records)
+                    state_update(target,data_revision=state['data_revision']+1,source_changes_pending=True,report_outdated=bool(state.get('report_version')),message='已批量核对'+str(len(changed))+'条；尚未分配章节的记录暂不参与写作')
+                    return self.json({'ok':True,'changed':len(changed)})
+                if action=='structured-update':
+                    from .structured_data import update_record
+                    records=load(target / 'structured-data.json',[])
+                    record=update_record(records,data,{main_heading_id(h) for h in project_profile(target,state)['headings'] if h['level']==1},state['files'])
+                    save(target / 'structured-data.json',records)
+                    state_update(target,data_revision=state['data_revision']+1,source_changes_pending=True,report_outdated=bool(state.get('report_version')),message='结构化记录已保存，核对仅确认转录，不替代专业判断')
+                    return self.json({'ok':True,'record':record})
+                if action == 'professional-link':
+                    from .professional_workspace import link_record
+                    links=load(target / 'professional-links.json',[])
+                    if data.get('operation')=='remove':
+                        if not any(r['id']==data.get('id') for r in links):raise ValueError('关联不存在')
+                        links=[r for r in links if r['id']!=data['id']]
+                    else:
+                        link_record(links,data.get('source_id'),data.get('target_kind'),data.get('target_id'),data.get('note'),ProfessionalLedger(target / 'professional.json',state['report_type']).list(),CalculationLedger(target / 'calculations.json').list(),MeasuresLedger(target / 'measures.json').list())
+                    save(target / 'professional-links.json',links)
+                    state_update(target,data_revision=state['data_revision']+1,source_changes_pending=True,report_outdated=bool(state.get('report_version')),message='专业引用关系已保存，目标结果仍在原台账审核和维护')
+                    return self.json({'ok':True})
+                if action == 'outline-edit':
+                    from .report_outline import change_outline,outline_profile,outline_report
+                    if data.get('base_version')!=state.get('report_version'):raise ValueError('报告已有新版本，请刷新目录')
+                    if 'outline_revision' in data and data['outline_revision']!=state.get('outline_revision',0):raise ValueError('目录已有修改，请刷新')
+                    ident=data.get('chapter_id')
+                    if data.get('operation','edit')!='add':assert_unlocked(load(target / 'chapter-workflow.json',{}),[ident])
+                    existing=versions.load_report(target)
+                    report,mapping=change_outline(existing or outline_report(project_profile(target,state)),data)
+                    old_outline=load(target / 'report-outline.json')
+                    outline=outline_profile(report);prior=(old_outline or {}).get('heading_map',{})
+                    outline['heading_map']={**{k:mapping.get(v,v) for k,v in prior.items()},**mapping}
+                    save(target / 'report-outline.json',outline)
+                    try:
+                        meta=None
+                        if existing:
+                            report['template_sha256']=project_profile(target,state)['sha256']
+                            report['quality_review']=project_quality(target,report,state)
+                            versions.preserve_legacy(target)
+                            meta=versions.commit(target,report,lambda r,p:export_report(target,r,p,state['files']),kind='edit',description='人工修改目录；删除内容可从历史版本找回')
+                    except Exception:
+                        if old_outline is None:(target / 'report-outline.json').unlink(missing_ok=True)
+                        else:save(target / 'report-outline.json',old_outline)
+                        raise
+                    changes={'outline_revision':state.get('outline_revision',0)+1,'message':'目录已保存；请核对图件位置、专业记录章节和交叉引用'}
+                    if meta:changes['report_version']=meta['id']
+                    state_update(target,**changes)
+                    return self.json({'ok':True,'version':meta['id'] if meta else None})
+                if action == 'template-content-review':
+                    from .report_template import review_body_block
+                    profile=project_profile(target,state)
+                    if data.get('expected_revision')!=profile.get('content_revision',0):raise ValueError('正文复用候选已更新，请刷新')
+                    is_reference=str(data.get('id','')).startswith('ref-')
+                    path=target/('reference-reuse.json' if is_reference else 'report-template.json')
+                    custom=load(path)
+                    if not custom:raise ValueError('请先读取参考报告或上传模板')
+                    visible={b['id'] for b in profile.get('body_blocks',[])}
+                    if data.get('id') not in visible:raise ValueError('来源已停用或变化，请重新读取')
+                    block=next((b for b in custom.get('body_blocks',[]) if b['id']==data.get('id')),None)
+                    if data.get('heading') is not None:
+                        allowed={h['text'] for h in profile['headings']}
+                        if data['heading'] not in allowed:raise ValueError('请选择当前报告中的目标标题')
+                        block['heading']=data['heading']
+                    if not block or not block.get('heading'):raise ValueError('请指定正文复用的目标章节或小节')
+                    block=review_body_block(custom,{**data,'expected_revision':custom.get('content_revision',0)})
+                    save(path,custom)
+                    changes={'data_revision':state['data_revision']+1,'source_changes_pending':True,'report_outdated':bool(state.get('report_version')),'message':'正文复用设置已保存，适用条件仍需专业审核；按需重写对应小节'}
+                    if not is_reference:changes['report_template']={**(state.get('report_template') or {}),'content_revision':custom['content_revision']}
+                    state_update(target,**changes)
+                    return self.json({'ok':True,'block':block,'content_revision':project_profile(target)['content_revision']})
+                if action in {'chapter-approval','chapter-order','assembly-check','assemble'}:
+                    from .pipeline import section_identity
+                    report=versions.load_report(target)
+                    if not report:raise ValueError('请先生成草稿')
+                    if data.get('base_version')!=state.get('report_version'):raise ValueError('报告已有新版本，请刷新')
+                    workflow=load(target / 'chapter-workflow.json',{})
+                    if action=='chapter-approval':
+                        if not isinstance(data.get('locked'),bool):raise ValueError('锁定状态无效')
+                        set_chapter_approval(report,state,workflow,data.get('chapter_id'),data['locked'])
+                        save(target / 'chapter-workflow.json',workflow)
+                        return self.json({'ok':True})
+                    if action=='chapter-order':
+                        order=data.get('order');ids=[section_identity(s) for s in report['sections']]
+                        if not isinstance(order,list) or len(order)!=len(ids) or not all(isinstance(i,str) for i in order) or set(order)!=set(ids):raise ValueError('排序必须包含当前全部章节且不能重复')
+                        workflow['order']=order;save(target / 'chapter-workflow.json',workflow)
+                        return self.json({'ok':True})
+                    quality=project_quality(target,report,state)
+                    checks=assembly_checks(report,state,workflow,project_profile(target,state),quality)
+                    if action=='assembly-check':return self.json(checks)
+                    if not checks['can_assemble']:raise ValueError('暂不能组稿：'+'；'.join(checks['blockers'][:5]))
+                    if checks['warnings'] and data.get('acknowledge_warnings') is not True:raise ValueError('请先查看并确认组稿提示')
+                    report=ordered_report(report,workflow);report['assembly_checks']=checks;report['quality_review']=quality
+                    report['assembled_at']=time.time();report['assembly_order']=[section_identity(s) for s in report['sections']]
+                    versions.preserve_legacy(target)
+                    meta=versions.commit(target,report,lambda r,p:export_report(target,r,p,state['files']),kind='assembly',description='按已确认章节排序组装总稿（未调用模型）')
+                    state_update(target,report_version=meta['id'],report_outdated=False,source_changes_pending=False,message='已组装总稿，未调用模型；请下载 Word 并完成专业审核')
+                    return self.json({'ok':True,'version':meta['id']})
                 if action == 'clear-node-progress':
                     (target / 'node-checkpoints.json').unlink(missing_ok=True)
                     (target / 'preflight-checkpoints.json').unlink(missing_ok=True)
@@ -864,17 +1275,21 @@ class Handler(BaseHTTPRequestHandler):
                 if action == 'cancel':
                     with LOCK:
                         event = JOB_CANCELLATIONS.get(str(target))
-                    if not state.get('busy') or state.get('current_operation') not in {'generate', 'preflight', 'knowledge-qa'} or not event:
+                    if not state.get('busy') or state.get('current_operation') not in {'generate', 'preflight', 'knowledge-qa', 'structured-extract'} or not event:
                         raise ValueError('当前没有可停止的生成或资料检查任务')
                     state_update(target, cancel_requested=True, message='正在停止当前任务并结束模型请求；已有草稿保留')
                     provider.cancel_request(event)
                     return self.json({'ok': True, 'message': '已发送停止请求'})
+                if action in {'delete-file', 'delete-files'}:
+                    delete_project_file(target, data)
+                    return self.json({'ok': True})
                 if action == 'files':
                     file = next((f for f in state['files'] if f['id'] == data.get('id')), None)
                     if not file:
                         raise ValueError('文件不存在')
                     old_role, old_active = file['role'], file['active']
                     metadata_changed = False
+                    report_source_changed=False
                     if 'role' in data:
                         info = assets.classify(file['name'], data['role'])
                         file.update(role=info['role'], status=info['status'])
@@ -918,8 +1333,12 @@ class Handler(BaseHTTPRequestHandler):
                                 text = section['paragraphs'][index].get('text', '')
                                 result['paragraph_hash'] = hashlib.sha256(text.encode('utf-8')).hexdigest()
                             file['figure_placement'] = result
+                    if 'report_source_confirmed' in data:
+                        if not isinstance(data['report_source_confirmed'],bool):raise ValueError('完整报告来源确认格式无效')
+                        report_source_changed=file.get('report_source_confirmed',False)!=data['report_source_confirmed']
+                        file['report_source_confirmed']=data['report_source_confirmed']
                     if 'document_type' in data:
-                        if data['document_type'] not in {'project_filing','company_certificate','process','materials','drawing','safety_analysis','historical_design','expert_review','other'}:
+                        if data['document_type'] not in DOCUMENT_TYPES:
                             raise ValueError('资料类型无效')
                         file['document_type'] = data['document_type']; metadata_changed = True
                     if 'document_source' in data:
@@ -938,7 +1357,7 @@ class Handler(BaseHTTPRequestHandler):
                         if len(value) > 120: raise ValueError('资料版本最多 120 字')
                         file['document_version'] = value; metadata_changed = True
                     state_update(target, files=state['files'], analysis_dirty=state['analysis_dirty'] or old_role != file['role'] or old_active != file['active'] or metadata_changed,
-                        source_changes_pending=state['source_changes_pending'] or (old_role != file['role'] and 'source' in {old_role, file['role']}) or old_active != file['active'] or metadata_changed,
+                        source_changes_pending=state['source_changes_pending'] or (old_role != file['role'] and 'source' in {old_role, file['role']}) or report_source_changed or old_active != file['active'] or metadata_changed,
                         report_outdated=True, data_revision=state['data_revision'] + 1, message='文件用途或图件设置已保存；已有草稿保留')
                     return self.json({'ok': True})
                 if action in {'analyze', 'generate'}:
@@ -947,13 +1366,23 @@ class Handler(BaseHTTPRequestHandler):
                     use_llm = data.get('use_llm', False) is True
                     model = settings.resolve(DATA, data.get('model_id')) if use_llm or data.get('ai_extract') else None
                     chapters = data.get('chapter_ids')
-                    existing_report = versions.load_report(target)
-                    allowed_chapters = {re.match(r'\d+', h['text']).group() for h in report_profile(state['report_type'], load(PROFILE))['headings'] if h['level'] == 1}
+                    existing_report = template_compatible_report(target)
+                    allowed_chapters = {main_heading_id(h) for h in project_profile(target, state)['headings'] if h['level'] == 1}
                     if existing_report:
                         allowed_chapters = {item.get('id') or (re.match(r'\d+', item.get('title', '')).group() if re.match(r'\d+', item.get('title', '')) else '')
                                              for item in existing_report.get('sections', [])}
+                    workflow=load(target / 'chapter-workflow.json',{})
+                    locked_ids={i for i,v in workflow.get('chapters',{}).items() if v.get('locked')}
+                    if action=='generate':
+                        if chapters is None:
+                            chapters=sorted(allowed_chapters-locked_ids)
+                            if not chapters:raise ValueError('所有章节均已锁定，请解锁要修改的章节，或进行最终组稿')
+                        elif isinstance(chapters,list) and all(isinstance(i,str) for i in chapters):assert_unlocked(workflow,chapters)
                     if chapters is not None and (not isinstance(chapters, list) or not chapters or any(not isinstance(n, str) or n not in allowed_chapters for n in chapters)):
                         raise ValueError('请选择要改写的章节')
+                    subsection_scope=validate_subsection_scope(data,existing_report,chapters)
+                    if subsection_scope and (action!='generate' or not use_llm):raise ValueError('小节改写仅支持智能编写')
+                    if subsection_scope and data.get('base_version')!=state.get('report_version'):raise ValueError('报告已有新版本，请刷新小节选择')
                     instructions = data.get('instructions', '')
                     if not isinstance(instructions, str) or len(instructions) > 4000:
                         raise ValueError('修改要求最多 4000 字')
@@ -975,7 +1404,7 @@ class Handler(BaseHTTPRequestHandler):
                         JOB_CANCELLATIONS[str(target)] = cancel_event
                     state_update(target, busy=True, cancel_requested=False, current_operation=action, error='', model_id=data.get('model_id', ''), message='正在读取新增资料' if action == 'analyze' else '正在生成新版本，已有草稿保留')
                     POOL.submit(job, target, action, use_llm, model, chapters, instructions, cancel_event,
-                                supplement_answers, supplement_chapter)
+                                supplement_answers, supplement_chapter,subsection_scope)
                     return self.json({'ok': True}, 202)
                 if action == 'facts':
                     received = data.get('fields')
@@ -995,12 +1424,15 @@ class Handler(BaseHTTPRequestHandler):
                 if action in {'edit', 'restore'}:
                     if data.get('base_version', '') != state['report_version']:
                         raise ValueError('报告已有新版本，请刷新后再保存，避免覆盖他人的修改')
+                    from .pipeline import section_identity
+                    existing=versions.load_report(target)
+                    requested_ids=[section_identity(s) for s in (existing or {}).get('sections',[]) if action=='restore' or any(e.get('title')==s['title'] for e in data.get('sections',[]) if isinstance(e,dict))]
+                    requested_ids+=data.get('delete_chapter_ids') or []
+                    assert_unlocked(load(target / 'chapter-workflow.json',{}),requested_ids)
                     report = versions.apply_edits(versions.load_report(target), data.get('sections', []),
                         data.get('add_chapter'), data.get('delete_chapter_ids')) if action == 'edit' else versions.load_report(target, data.get('version', ''))
-                    report['quality_review'] = review_report(report, state,
-                        MeasuresLedger(target / 'measures.json').list(),
-                        CalculationLedger(target / 'calculations.json').list(),
-                ProfessionalLedger(target / 'professional.json', state['report_type']).list())
+                    report['professional_links']=current_links(target,state)
+                    report['quality_review'] = project_quality(target,report,state)
                     versions.preserve_legacy(target)
                     if action == 'restore':
                         import shutil
