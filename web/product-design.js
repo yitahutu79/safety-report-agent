@@ -106,11 +106,20 @@ $('#projects').after(recycleButton);
 const recycleDialog=el('dialog');recycleDialog.id='project-trash-dialog';recycleDialog.innerHTML='<h2>项目回收站</h2><p class="muted">项目移入回收站后不会出现在项目列表，可在此恢复。</p><div id="project-trash-list"></div><div class="dialog-actions"><button type="button" class="secondary" id="project-trash-close">关闭</button></div>';document.body.append(recycleDialog);$('#project-trash-close').onclick=()=>recycleDialog.close();
 listProjects().catch(error=>notify(error.message));
 
-// Local test record is available even before a project is selected.
+// Shared repository test records are available even before a project is selected.
 const testRecordPanel=el('section',undefined,'card test-record-panel hidden');
 testRecordPanel.id='test-record-panel';
-testRecordPanel.innerHTML='<div class="test-record-heading"><div><span class="overline">TEST RECORD</span><h2>全流程测试记录</h2><p class="section-description">查看实际测试结果、未通过问题与待完成事项。</p></div><span class="tag">2026-11-17</span></div><div id="test-record-content" aria-live="polite"></div>';
+testRecordPanel.innerHTML='<div class="test-record-heading"><div><span class="overline">TEST RECORD</span><h2>全流程测试记录</h2><p class="section-description">查看实际测试结果、未通过问题与待完成事项。</p></div><span class="tag" id="test-record-date">仓库共享记录</span></div><div id="test-record-content" aria-live="polite"></div>';
 $('#workspace').after(testRecordPanel);
+const testRecordSelector=el('select');testRecordSelector.setAttribute('aria-label','选择共享测试记录');
+const testRecordSource=el('p',undefined,'muted');testRecordPanel.querySelector('.test-record-heading').after(testRecordSelector,testRecordSource);
+async function loadSharedTestRecord(record='latest'){
+ const data=await api('/api/test-record?record='+encodeURIComponent(record));
+ testRecordSelector.replaceChildren();for(const item of data.records)testRecordSelector.append(new Option(item.label,item.id,false,item.id===data.record));
+ $('#test-record-date').textContent=data.updated_at?'记录更新至 '+data.updated_at:'仓库共享记录';
+ testRecordSource.textContent='来源：docs/'+data.source+' · 与GitHub仓库中的同名文件一致；拉取代码后更新。';renderTestRecord(data.content);
+}
+testRecordSelector.onchange=()=>loadSharedTestRecord(testRecordSelector.value).catch(error=>notify(error.message));
 function renderTestRecord(markdown){
  const root=$('#test-record-content');root.replaceChildren();const lines=markdown.split(/\r?\n/);
  for(let i=0;i<lines.length;i++){
@@ -122,9 +131,9 @@ function renderTestRecord(markdown){
  }
 }
 const testNav=button('测试记录',async()=>{
- const data=await api('/api/test-record');
+ await loadSharedTestRecord();
  $('#workspace').classList.add('hidden');$('#welcome').classList.add('hidden');$('.intro').classList.add('hidden');testRecordPanel.classList.remove('hidden');document.body.dataset.currentView='test-record';
- taskButtons.forEach(x=>x.classList.remove('is-current'));addNav.classList.remove('is-current');testNav.classList.add('is-current');renderTestRecord(data.content);window.scrollTo({top:0,behavior:'smooth'});
+ taskButtons.forEach(x=>x.classList.remove('is-current'));addNav.classList.remove('is-current');testNav.classList.add('is-current');window.scrollTo({top:0,behavior:'smooth'});
 },'task-nav-link');
 testNav.prepend(navIcon('M5 4h14v16H5z|M8 8h8|M8 12h8|M8 16h5'));
 const recordGroup=el('div',undefined,'task-nav-group');recordGroup.append(el('div','项目交付','task-nav-heading'),testNav);sidebarNav.append(recordGroup);

@@ -721,12 +721,18 @@ class Handler(BaseHTTPRequestHandler):
             if not self.authorized():
                 return self.json({'error': '请登录工作台', 'login_required': True}, 401)
             if path == '/api/test-record':
-                record = ROOT / 'docs' / '全流程测试记录-2026-11-17.md'
-                if not record.is_file():
-                    record = ROOT / 'docs' / 'TESTING.md'
-                if not record.is_file():
-                    return self.json({'error': '当前软件包没有这份测试记录'}, 404)
-                return self.json({'content': record.read_text(encoding='utf-8')})
+                catalog=[{'id':'latest','label':'最新测试进展','file':'TESTING.md'},
+                         {'id':'history','label':'全流程历史记录','file':'全流程测试记录-2026-11-17.md'}]
+                available=[r for r in catalog if (ROOT/'docs'/r['file']).is_file()]
+                choice=query.get('record',['latest'])[0]
+                if choice not in {'latest','history'}:raise ValueError('请选择有效的测试记录')
+                item=next((r for r in available if r['id']==choice),None)
+                if item is None and choice=='latest' and available:item=available[0]
+                if item is None:return self.json({'error':'当前软件包没有这份测试记录'},404)
+                content=(ROOT/'docs'/item['file']).read_text(encoding='utf-8')
+                dates=re.findall(r'\b20\d{2}-\d{2}-\d{2}\b',content)
+                return self.json({'content':content,'record':item['id'],'source':item['file'],
+                                  'updated_at':max(dates) if dates else '', 'records':available})
             if path == '/api/settings':
                 return self.json(settings.public(DATA))
             if path == '/api/status':

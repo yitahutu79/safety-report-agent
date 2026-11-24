@@ -46,7 +46,7 @@ def main():
     command = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onedir', '--windowed',
                '--name', NAME, '--icon', str(icon), '--distpath', str(ROOT / 'dist'),
                '--workpath', str(ROOT / 'build' / 'pyinstaller')]
-    for source, dest in [('web','web'),('reference','reference'),('skills','skills'),('branding','branding'),('third_party','third_party'),('docs/TESTING.md','docs')]:
+    for source, dest in [('web','web'),('reference','reference'),('skills','skills'),('branding','branding'),('third_party','third_party'),('docs/TESTING.md','docs'),('docs/全流程测试记录-2026-11-17.md','docs')]:
         command += ['--add-data', f'{ROOT / source}{os.pathsep}{dest}']
     packages = ['webview','qdrant_client','fastembed','onnxruntime','pypdfium2','PIL','rapidocr']
     if sys.platform == 'linux':
