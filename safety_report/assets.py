@@ -138,6 +138,8 @@ def resolve_figure_placements(report, figures):
                 reason = '指定章节不存在'
             elif section.get('generation_status') in {'not_generated', 'failed'} or section.get('needs_rewrite') or section.get('generation_error'):
                 reason = '指定章节未生成或生成失败'
+            elif location.get('heading') and location['heading'] not in [section['title']]+section.get('subheadings',[]):
+                reason='指定小节不存在'
             elif location.get('paragraph_index') is not None:
                 expected = location.get('paragraph_hash', '')
                 matches = [i for i, p in enumerate(section.get('paragraphs', []))

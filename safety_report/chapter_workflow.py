@@ -11,14 +11,14 @@ def digest(value):
 
 
 def section_digest(section):
-    return digest({k:section.get(k) for k in ('title','subheadings','paragraphs','tables','missing','review','generation_status','generation_error','needs_rewrite')})
+    return digest({k:section.get(k) for k in ('title','subheadings','paragraphs','tables','figures','missing','review','generation_status','generation_error','needs_rewrite')})
 
 
 def dependency_snapshot(state, section=None, report=None):
     files=[{k:f.get(k) for k in ('id','name','sha256','active','role','document_date','document_version')} for f in state.get('files',[])]
     selected=files
     if section is not None and report is not None:
-        ids={i for p in section.get('paragraphs',[])+section.get('tables',[]) for i in p.get('evidence_ids',[])}
+        ids={i for p in section.get('paragraphs',[])+section.get('tables',[])+section.get('figures',[]) for i in p.get('evidence_ids',[])}
         refs=[e for e in report.get('evidence',[]) if e.get('id') in ids and e.get('corpus')!='reviewed_template']
         names={e.get('source') for e in refs};hashes={e.get('sha256') for e in refs if e.get('sha256')}
         if names or hashes:selected=[f for f in files if f.get('name') in names or f.get('sha256') in hashes]
@@ -94,7 +94,7 @@ def assembly_checks(report,state,workflow,profile,quality):
         blockers.extend(title+'：'+msg for msg in v['warnings'])
         blockers.extend(title+'：待补充 '+str(m) for m in s.get('missing',[]))
         warnings.extend(title+'：'+str(m) for m in s.get('review',[]))
-        for item in s.get('paragraphs',[])+s.get('tables',[]):
+        for item in s.get('paragraphs',[])+s.get('tables',[])+s.get('figures',[]):
             if not item.get('evidence_ids') or any(e not in evidence for e in item.get('evidence_ids',[])):blockers.append(title+'：正文存在缺失或失效的来源引用')
     for check in quality.get('checks',[]):
         if check.get('status')=='fail':blockers.append(check['title']+'：'+check.get('detail',''))

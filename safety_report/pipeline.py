@@ -620,6 +620,7 @@ def generate(profile, analysis, fields, use_llm, on_progress=lambda text: None,
             successes += 1
         if number in subsections and not result.get('generation_error'):
             result=merge_subsection_revision(old_sections[number],result,subsections[number],all_headings)
+        if old_sections.get(number,{}).get('figures'):result['figures']=copy.deepcopy(old_sections[number]['figures'])
         result.update({'title': title, 'subheadings': all_headings})
         if chapter.get('id'):
             result.update({'id': chapter['id'], 'custom': True})

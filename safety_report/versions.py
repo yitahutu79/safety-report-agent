@@ -105,7 +105,7 @@ def review_html(report):
     parts.extend('<p>' + escape(s) + '</p>' for s in review['figure_warnings'])
     parts.append('<h2>资料出处</h2>')
     for section in report['sections']:
-        for index, item in enumerate(section.get('paragraphs', []) + section.get('tables', []), 1):
+        for index, item in enumerate(section.get('paragraphs', []) + section.get('tables', []) + section.get('figures', []), 1):
             refs = [evidence[eid] for eid in item.get('evidence_ids', []) if eid in evidence]
             parts.append('<p><b>' + escape(section['title']) + f' · 内容{index}</b><br>' + '<br>'.join(escape(e['source'] + ' ' + e['locator']) for e in refs) + ('人工编辑内容' if item.get('human_edited') else '') + '</p>')
     return '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>报告核对清单</title><style>body{max-width:900px;margin:40px auto;padding:0 24px;font:15px/1.9 sans-serif;color:#203b33}h1{font-size:26px}h2{font-size:19px;margin-top:32px}li,p{overflow-wrap:anywhere}</style>' + ''.join(parts) + '</html>'

@@ -178,12 +178,14 @@ function drawReadingView(){
   const title=row.querySelector('select').value;
   if(title&&title!==section.title&&title!==heading){preview.append(el('h4',title));heading=title;}
   preview.append(el('p',row.querySelector('textarea').value||'（空段落）'));
+  if(typeof appendDocumentFigurePreview==='function')appendDocumentFigurePreview(preview,Number(row.dataset.originalIndex));
  }
  for(const source of $('#table-editor').querySelectorAll('.editor-table')){
   if(source.hidden)continue;
   preview.append(el('h4',source.querySelector('h3').textContent));const wrap=el('div',undefined,'reading-table-wrap');const table=el('table');
   for(const original of source.querySelectorAll('tr')){const tr=el('tr');for(const cell of original.children){const copy=el(cell.tagName==='TH'?'th':'td',cell.querySelector('textarea').value);copy.rowSpan=cell.rowSpan;copy.colSpan=cell.colSpan;tr.append(copy);}table.append(tr);}wrap.append(table);preview.append(wrap);
  }
+ if(typeof appendDocumentFigurePreview==='function')appendDocumentFigurePreview(preview,null);
  if(!preview.children.length)preview.append(el('p','当前范围暂无正文。可以使用右侧编写助手生成，或切换编辑补充内容。','reading-empty'));
  const count=[...$('#paragraph-editor').querySelectorAll('textarea')].reduce((n,x)=>n+x.value.replace(/\s/g,'').length,0);
  $('#reading-meta').textContent=count+' 字 · '+$('#table-editor').children.length+' 张表 · '+(editorDirty?'含未暂存修改':current?.has_working_report?'本轮编辑暂存，未生成版本':'已保存版本')+' · 图件及分页以 Word 为准';

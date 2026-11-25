@@ -1,4 +1,4 @@
-"""生成独立的 Word 草稿，不复制旧报告的正文、页眉、图片或作者信息。"""
+"""按当前编辑内容生成独立Word草稿，图件仅使用用户明确选入的来源。"""
 import re
 import struct
 import zipfile
@@ -104,13 +104,26 @@ def write_docx(report, profile, path, figures=()):
             for t in section.get('tables',[]):
                 if t.get('source_table_id'):
                     parts.append(paragraph(t['caption'],'Caption'));parts.append(table(t['headers'],t['rows'],layout=t.get('source_table_layout')))
+            for location,image_parts in rendered_figures:
+                if location.get('section_id')==section_id:
+                    if location.get('heading') and location['heading']!=section['title']:
+                        number=re.match(r'^\d+(?:\.\d+)*',location['heading']);level=min(3,len(number.group().split('.'))) if number else 2
+                        parts.append(paragraph(location['heading'],'Heading'+str(level)))
+                    parts.extend(image_parts)
             continue
         if section.get('generation_status') == 'failed' or section.get('needs_rewrite') or section.get('generation_error'):
             parts.append(paragraph('本章未通过生成检查，本次导出不包含旧版正文。请在工作台单独重试本章；失败信息见核对清单。'))
+            for location,image_parts in rendered_figures:
+                if location.get('section_id')==section_id:
+                    if location.get('heading') and location['heading']!=section['title']:
+                        number=re.match(r'^\d+(?:\.\d+)*',location['heading']);level=min(3,len(number.group().split('.'))) if number else 2
+                        parts.append(paragraph(location['heading'],'Heading'+str(level)))
+                    parts.extend(image_parts)
             continue
         all_items = [('paragraph', p) for p in section.get('paragraphs', [])] + [('table', t) for t in section.get('tables', [])]
         if all('source_order' in item for _,item in all_items):all_items.sort(key=lambda pair:pair[1]['source_order'])
         filled = {item.get('heading', section['title']) for _, item in all_items}
+        filled.update(location['heading'] for location,_ in rendered_figures if location.get('section_id')==section_id and location.get('heading'))
         visible = set(filled)
         # 只显示有正文的子节及其父级，避免一百多个空标题和占位句。
         for heading in section.get('subheadings', []):
@@ -137,10 +150,12 @@ def write_docx(report, profile, path, figures=()):
                 else:
                     parts.append(paragraph(item['caption'], 'Caption'))
                     parts.append(table(item['headers'], item['rows'],layout=item.get('source_table_layout')))
-        if not all_items:
+            for location,image_parts in rendered_figures:
+                if location.get('section_id')==section_id and location.get('heading')==heading and location.get('paragraph_index') is None:parts.extend(image_parts)
+        if not all_items and not section.get('figures'):
             parts.append(paragraph('本章尚待补充项目资料。'))
         for location, image_parts in rendered_figures:
-            if location.get('section_id') == section_id and location.get('paragraph_index') is None:
+            if location.get('section_id') == section_id and not location.get('heading') and location.get('paragraph_index') is None:
                 parts.extend(image_parts)
     # 缺失项、审阅意见和证据追溯在独立 review.html / JSON 中呈现，不穿插正文。
     appendix_figures = [image_parts for location, image_parts in rendered_figures if not location.get('section_id')]

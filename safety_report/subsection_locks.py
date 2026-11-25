@@ -6,14 +6,14 @@ from .pipeline import section_identity
 def content(report,chapter,heading):
     section=next((s for s in (report or {}).get('sections',[]) if section_identity(s)==chapter),None)
     if not section or heading not in section.get('subheadings',[]):return None
-    return {'paragraphs':[{k:p.get(k) for k in ('heading','text')} for p in section.get('paragraphs',[]) if p.get('heading',section['title'])==heading],
+    return {'figures':[f for f in section.get('figures',[]) if f.get('heading')==heading],'paragraphs':[{k:p.get(k) for k in ('heading','text')} for p in section.get('paragraphs',[]) if p.get('heading',section['title'])==heading],
             'tables':[{k:t.get(k) for k in ('heading','caption','headers','rows')} for t in section.get('tables',[]) if t.get('heading',section['title'])==heading]}
 
 
 def set_lock(report,workflow,chapter,heading,locked):
     data=content(report,chapter,heading)
     if data is None:raise ValueError('小节不存在，请刷新')
-    if locked and not(data['paragraphs'] or data['tables']):raise ValueError('该小节还没有正文或表格，暂不能确认锁定')
+    if locked and not(data['paragraphs'] or data['tables'] or data['figures']):raise ValueError('该小节还没有正文、表格或图件，暂不能确认锁定')
     workflow.setdefault('subsections',{}).setdefault(chapter,{})[heading]={'locked':locked,'content_hash':hashlib.sha256(json.dumps(data,ensure_ascii=False,sort_keys=True).encode()).hexdigest()}
 
 

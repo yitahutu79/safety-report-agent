@@ -27,15 +27,15 @@ def edit_chapter_outline(report,chapter_id,title,subheadings,delete_content=Fals
         validate_headings(headings)
         if any(not t.startswith(number.group()+'.') for t in new):raise ValueError('小节编号须归属于当前主章节')
     elif len(set(new))!=len(new) or any(not t or len(t)>180 for t in new):raise ValueError('小节标题无效或重复')
-    used={p.get('heading',old_title) for p in section.get('paragraphs',[])+section.get('tables',[])}
+    used={p.get('heading',old_title) for p in section.get('paragraphs',[])+section.get('tables',[])+section.get('figures',[])}
     removed=set(old)-seen
     if removed & used and not delete_content:raise ValueError('以下小节仍有正文或表格，请先将内容移到其他小节再删除：'+'、'.join(removed & used))
     if any(s is not section and s['title']==title for s in result['sections']):raise ValueError('主章节标题重复')
     if delete_content:
-        for key in ('paragraphs','tables','template_reuse_records'):
+        for key in ('paragraphs','tables','figures','template_reuse_records'):
             section[key]=[item for item in section.get(key,[]) if item.get('heading') not in removed]
     section['title']=title;section['subheadings']=new
-    for item in section.get('paragraphs',[])+section.get('tables',[]):
+    for item in section.get('paragraphs',[])+section.get('tables',[])+section.get('figures',[]):
         item['heading']=mapping.get(item.get('heading',old_title),item.get('heading',title))
     for record in section.get('template_reuse_records',[]):record['heading']=mapping.get(record['heading'],record['heading'])
     cited={i for p in section.get('paragraphs',[]) for i in p.get('evidence_ids',[])}

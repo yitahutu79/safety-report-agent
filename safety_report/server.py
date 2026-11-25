@@ -408,6 +408,8 @@ def analyze_project(target, model=None):
 def export_report(target, report, output, files):
     figures, warnings = assets.collect_figures(target, files)
     figures += assets.collect_original_appendices(target, files)
+    from .document_images import collect
+    figures += collect(target,report,files)
     if (target / 'flow.png').exists():
         figures.append({'path': str(target / 'flow.png'), 'caption': '工艺流程图', 'source': '已核对的工艺步骤'})
     if (target / 'map.png').exists():
@@ -804,6 +806,22 @@ class Handler(BaseHTTPRequestHandler):
                     public['quality_review'] = view_review
                     public['quality_review_scope'] = '查看时复核（含当前台账）；不覆盖历史版本审核快照'
                     return self.json({'report': public, 'version': load(target / 'state.json').get('report_version', '')})
+            if action=='source-images':
+                from .document_images import catalog
+                state=load(target/'state.json');file=next((f for f in state['files'] if f['id']==query.get('file_id',[''])[0] and f.get('active',True)),None)
+                if not file:raise ValueError('请选择当前项目的来源文件')
+                data=catalog(target,file);kind=query.get('kind',['image'])[0]
+                if kind not in {'image','page'}:raise ValueError('图件类别无效')
+                images=[i for i in data['items'] if i['kind']=='image']
+                if not images and kind=='image':kind='page'
+                items=[i for i in data['items'] if i['kind']==kind];page=max(1,int(query.get('page',['1'])[0]));pages=max(1,(len(items)+7)//8);page=min(page,pages)
+                return self.json({'items':items[(page-1)*8:page*8],'total':len(items),'page':page,'pages':pages,'kind':kind,'image_count':len(images),'warnings':data['warnings']})
+            image_match=re.fullmatch(r'source-images/([a-f0-9]{32})/preview',action)
+            if image_match:
+                from .document_images import find,render
+                state=load(target/'state.json');file,item=find(target,state['files'],query.get('file_id',[''])[0],image_match[1])
+                path=render(target,file,item,query.get('thumb',['0'])[0]=='1')
+                return self.send_bytes(200,path.read_bytes(),'image/png')
             if action == 'source-tables':
                 from .table_reuse import source_tables
                 state=load(target/'state.json')
@@ -965,7 +983,7 @@ class Handler(BaseHTTPRequestHandler):
                         with LOCK:
                             shutil.move(str(trash), str(target))
                     return self.json({'ok': True})
-            match = re.fullmatch(r'/api/projects/([a-f0-9]{24})/(save-working|subsection-approval|reuse-source-table|structured-regroup|structured-bulk-review|structured-extract|structured-update|outline-edit|professional-link|chapter-approval|chapter-order|assembly-check|assemble|template-content-review|template-upload|template-apply|template-reset|upload|analyze|facts|generate|preflight|materials-plan|cancel|ack-error|clear-node-progress|flow|geocode|map|files|delete-file|delete-files|edit|restore|measures|calculations|professional|rag-test|knowledge-qa)', path)
+            match = re.fullmatch(r'/api/projects/([a-f0-9]{24})/(insert-source-image|remove-source-image|save-working|subsection-approval|reuse-source-table|structured-regroup|structured-bulk-review|structured-extract|structured-update|outline-edit|professional-link|chapter-approval|chapter-order|assembly-check|assemble|template-content-review|template-upload|template-apply|template-reset|upload|analyze|facts|generate|preflight|materials-plan|cancel|ack-error|clear-node-progress|flow|geocode|map|files|delete-file|delete-files|edit|restore|measures|calculations|professional|rag-test|knowledge-qa)', path)
             if not match:
                 return self.json({'error': '接口不存在'}, 404)
             target, action = directory(match[1]), match[2]
@@ -1249,6 +1267,27 @@ class Handler(BaseHTTPRequestHandler):
                     state_update(target,busy=True,current_operation='structured-extract',cancel_requested=False,error='',message='正在准备相关片段')
                     POOL.submit(structured_extract_job,target,file['id'],domain,model,event)
                     return self.json({'ok':True},202)
+                if action in {'insert-source-image','remove-source-image'}:
+                    from .document_images import find,insert,render
+                    from .subsection_locks import assert_unchanged
+                    from .pipeline import section_identity
+                    if data.get('base_version','')!=state.get('report_version',''):raise ValueError('报告已有新版本，请刷新')
+                    existing=versions.load_report(target)
+                    if not existing:raise ValueError('请先生成草稿，再插入图件')
+                    ident=data.get('section_id');affected=[ident]+[section_identity(s) for s in existing['sections'] if any(f['id']==data.get('replace_figure_id') for f in s.get('figures',[]))];assert_unlocked(load(target/'chapter-workflow.json',{}),affected)
+                    if action=='insert-source-image':
+                        file,item=find(target,state['files'],data.get('file_id'),data.get('asset_id'))
+                        if not item.get('supported'):raise ValueError(item.get('warning','图片暂不支持转换'))
+                        render(target,file,item)
+                        report=insert(existing,item,data)
+                    else:
+                        report=copy.deepcopy(existing);section=next((s for s in report['sections'] if section_identity(s)==ident),None)
+                        if not section or not any(f['id']==data.get('figure_id') for f in section.get('figures',[])):raise ValueError('图件不存在，请刷新')
+                        section['figures']=[f for f in section['figures'] if f['id']!=data['figure_id']]
+                    assert_unchanged(existing,report,load(target/'chapter-workflow.json',{}))
+                    meta=versions.stage(target,report,data.get('working_revision'))
+                    state_update(target,message='图件已更新到编辑区，完成本轮编辑后统一保存版本',error='')
+                    return self.json({'ok':True,'working_revision':meta['working_revision']})
                 if action=='subsection-approval':
                     from .subsection_locks import set_lock
                     if data.get('base_version','')!=state.get('report_version',''):raise ValueError('报告版本已变化，请刷新')
