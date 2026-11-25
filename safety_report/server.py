@@ -406,8 +406,11 @@ def analyze_project(target, model=None):
 
 
 def export_report(target, report, output, files):
-    figures, warnings = assets.collect_figures(target, files)
-    figures += assets.collect_original_appendices(target, files)
+    from .report_appendices import build as build_appendices,collect as collect_appendices
+    plan=build_appendices(target,report,files);report['appendix_manifest']=plan
+    figures,warnings=assets.collect_figures(target,[f for f in files if f['id'] not in plan['whole_file_ids'] or f.get('figure_placement',{}).get('section_id')])
+    warnings+=plan['warnings']+[item['title']+'：'+warning for item in plan['items'] for warning in item['warnings']]
+    figures+=collect_appendices(target,plan,files)
     from .document_images import collect
     figures += collect(target,report,files)
     if (target / 'flow.png').exists():
@@ -797,6 +800,9 @@ class Handler(BaseHTTPRequestHandler):
                     chapter_workflow=load(target / 'chapter-workflow.json',{})
                     if not query.get('version'):report=ordered_report(report,chapter_workflow)
                     public = {k: v for k, v in report.items() if k != 'evidence'}
+                    if not query.get('version'):
+                        from .report_appendices import build as build_appendices
+                        public['appendix_manifest']=build_appendices(target,report,load(target/'state.json')['files'])
                     public['subsection_locks']=chapter_workflow.get('subsections',{})
                     public['_working_revision']=versions.working_revision(target) if not query.get('version') else 0
                     public['chapter_workflow']=workflow_view(report,upgrade_state(load(target / 'state.json')),chapter_workflow)
@@ -1430,6 +1436,8 @@ class Handler(BaseHTTPRequestHandler):
                         workflow['order']=order;save(target / 'chapter-workflow.json',workflow)
                         return self.json({'ok':True})
                     quality=project_quality(target,report,state)
+                    from .report_appendices import build as build_appendices
+                    report['appendix_manifest']=build_appendices(target,report,state['files'])
                     checks=assembly_checks(report,state,workflow,project_profile(target,state),quality)
                     if action=='assembly-check':return self.json(checks)
                     if not checks['can_assemble']:raise ValueError('暂不能组稿：'+'；'.join(checks['blockers'][:5]))

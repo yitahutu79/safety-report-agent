@@ -87,3 +87,15 @@ def test_http_locks_order_and_assembly_without_model_calls(tmp_path,monkeypatch)
         assert not checks['can_assemble'] and any('更新' in x for x in checks['blockers'])
     finally:
         http.shutdown();http.server_close();thread.join(timeout=5)
+
+
+def test_final_assembly_requires_attachment_originals_not_only_titles():
+    report,state,profile=sample();w={}
+    for ident in ('1','2'):set_chapter_approval(report,state,w,ident,True)
+    assert assembly_checks(report,state,w,profile,{'checks':[]})['can_assemble']
+    report['appendix_manifest']={'items':[{'title':'附件3 营业执照','assets':[],'warnings':[]}],'warnings':[]}
+    checks=assembly_checks(report,state,w,profile,{'checks':[]})
+    assert not checks['can_assemble'] and any('附件原件' in b for b in checks['blockers'])
+    report['appendix_manifest']['items'][0].update(assets=[{'kind':'image'}],warnings=['组合图完整性需核对'])
+    checks=assembly_checks(report,state,w,profile,{'checks':[]})
+    assert checks['can_assemble'] and any('完整性' in warning for warning in checks['warnings'])

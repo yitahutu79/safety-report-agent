@@ -96,6 +96,11 @@ def assembly_checks(report,state,workflow,profile,quality):
         warnings.extend(title+'：'+str(m) for m in s.get('review',[]))
         for item in s.get('paragraphs',[])+s.get('tables',[])+s.get('figures',[]):
             if not item.get('evidence_ids') or any(e not in evidence for e in item.get('evidence_ids',[])):blockers.append(title+'：正文存在缺失或失效的来源引用')
+    plan=(report or {}).get('appendix_manifest',{})
+    warnings.extend(plan.get('warnings',[]))
+    for item in plan.get('items',[]):
+        if not item.get('assets'):blockers.append(item['title']+'：尚未关联明确的附件原件')
+        warnings.extend(item['title']+'：'+warning for warning in item.get('warnings',[]))
     for check in quality.get('checks',[]):
         if check.get('status')=='fail':blockers.append(check['title']+'：'+check.get('detail',''))
         elif check.get('status')=='warning':warnings.append(check['title']+'：'+check.get('detail',''))

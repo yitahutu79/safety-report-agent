@@ -60,3 +60,26 @@ def test_inserted_image_url_uses_asset_id_instead_of_report_figure_id():
     script="const p=require(process.argv[1]);console.log(p.documentImagePreviewPath({id:'report-figure',asset_id:'source-image',source_file_id:'f1'},true));console.log(p.documentImagePreviewPath({id:'catalog-image',source_file_id:'f1'}))"
     lines=subprocess.check_output([node,'-e',script,str(ROOT/'web/report-preview.js')],text=True).splitlines()
     assert lines==['source-images/source-image/preview?file_id=f1&thumb=1','source-images/catalog-image/preview?file_id=f1']
+
+
+def test_intro_scope_only_contains_unassigned_body_in_browser():
+    node=shutil.which('node')
+    if not node:pytest.skip('Node required for browser intro filtering')
+    s=section();s['paragraphs'].append({'heading':s['title'],'text':'章首旧摘录'})
+    script="const p=require(process.argv[1]),s=JSON.parse(process.argv[2]);console.log(JSON.stringify(p.reportPreviewOrder(s,'__chapter_intro__')));console.log(p.reportEditorHeadingInScope('2.1.1 流程','__chapter_intro__',s.title))"
+    lines=subprocess.check_output([node,'-e',script,str(ROOT/'web/report-preview.js'),json.dumps(s)],text=True).splitlines()
+    assert json.loads(lines[0])==[{'kind':'heading','heading':s['title']},{'kind':'paragraph','index':3,'heading':s['title'],'stale':False}]
+    assert lines[1]=='false'
+
+
+def test_remove_legacy_unassigned_excerpts_preserves_subsections_and_sources():
+    from safety_report.versions import apply_edits
+    s=section();s['paragraphs'].append({'text':'资料摘录：旧措施堆积','evidence_ids':['old-evidence']})
+    old={'sections':[s],'evidence':[{'id':'old-evidence','text':'来源保留'}]}
+    kept=[dict(p,original_index=i) for i,p in enumerate(s['paragraphs']) if p.get('heading')]
+    new=apply_edits(old,[{'title':s['title'],'paragraphs':kept,'tables':s['tables']}])
+    assert [p['text'] for p in new['sections'][0]['paragraphs']]==[p['text'] for p in s['paragraphs'][:3]]
+    assert new['sections'][0]['figures']==s['figures']
+    assert [{k:v for k,v in t.items() if k!='human_edited'} for t in new['sections'][0]['tables']]==s['tables']
+    assert not new['sections'][0]['tables'][0]['human_edited']
+    assert new['evidence']==old['evidence'] and len(old['sections'][0]['paragraphs'])==4

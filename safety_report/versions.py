@@ -44,6 +44,7 @@ def audit(report):
     return {'unconfirmed_fields': report.get('unconfirmed_fields', []),
         'chapters': [{'title': s['title'], 'missing': s.get('missing', []), 'review': s.get('review', [])} for s in report['sections']],
         'structure_changes': report.get('structure_changes', []),
+        'appendix_manifest':report.get('appendix_manifest',{}),
         'professional_links':report.get('professional_links',[]),
         'template_reuse_records': [{'title':s['title'],'items':s.get('template_reuse_records',[])} for s in report['sections'] if s.get('template_reuse_records')],
         'figure_warnings': report.get('figure_warnings', []), 'generation_errors': report.get('generation_errors', []),

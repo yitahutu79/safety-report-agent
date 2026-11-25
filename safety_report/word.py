@@ -81,6 +81,8 @@ def write_docx(report, profile, path, figures=()):
     available_width=(int(page_size.get('w',11905))-int(page_margins.get('left',1587))-int(page_margins.get('right',1134)))*635
     available_height=(int(page_size.get('h',16838))-int(page_margins.get('top',1417))-int(page_margins.get('bottom',1134))-600)*635
     for index, figure in enumerate(figures, 1):
+        if figure.get('appendix_table') or figure.get('appendix_text'):
+            original_pages.append((figure,None));continue
         data = Path(figure['path']).read_bytes()
         if data[:8] != b'\x89PNG\r\n\x1a\n':
             continue
@@ -165,8 +167,11 @@ def write_docx(report, profile, path, figures=()):
     for figure,image in original_pages:
         parts.append('<w:p><w:r><w:br w:type="page"/></w:r></w:p>')
         if figure['original_page']==1:
-            parts.append(paragraph('附录 · '+figure['caption'],'Heading1'))
-        parts.append(image)
+            parts.append(paragraph(figure.get('attachment_title') or '附录 · '+figure['caption'],'Heading1'))
+        if figure.get('appendix_table'):
+            t=figure['appendix_table'];parts.append(table(t['headers'],t['rows'],layout=t.get('source_table_layout')))
+        elif figure.get('appendix_text'):parts.append(paragraph(figure['appendix_text']))
+        else:parts.append(image)
     first_section = (profile.get('sections') or [{}])[0]
     size = first_section.get('pgSz', {'w': '11905', 'h': '16838'})
     margins = first_section.get('pgMar', {'top': '1417', 'right': '1134', 'bottom': '1134', 'left': '1587'})
