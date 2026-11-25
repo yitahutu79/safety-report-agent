@@ -180,10 +180,15 @@ const sourceTableBeforeRender=renderEditor;renderEditor=function(){sourceTableBe
 
 
 // Local working copy is durable; only an explicit batch save creates a downloadable version.
-let activeEditSubsection='',activeEditChapter='';
+let activeEditSubsection='',activeEditChapter='',savingWorkingVersion=false;
 const workingStatus=el('p',undefined,'working-copy-status');workingStatus.setAttribute('role','status');
-const saveWorkingButton=button('保存本轮修改并生成版本',async()=>{if(editorDirty)await saveSection();if(!current.has_working_report)throw Error('当前没有待保存的修改');await post(endpoint('save-working'),{base_version:current.report_version});loadedVersion=null;await refresh();notify('本轮修改已统一保存为一个版本，可以下载Word');},'primary');saveWorkingButton.id='save-working-version';
-const renderBeforeWorkingCopy=render;render=function(project){renderBeforeWorkingCopy(project);const heading=$('#editor-card .card-heading');if(heading&&!$('#save-working-version'))heading.append(saveWorkingButton);if(!workingStatus.isConnected)$('#editor-content').prepend(workingStatus);workingStatus.textContent=project.has_working_report?'本轮修改已自动暂存，可继续逐小节编辑和锁定。尚未生成下载版本；完成后请统一保存。':'编辑区就绪。改写和暂存不生成下载版本，完成本轮修改后统一保存。';saveWorkingButton.disabled=!!project.busy||(!project.has_working_report&&!editorDirty);$('#save-section').textContent='暂存当前编辑';if(project.has_working_report)$('#downloads').replaceChildren(el('p','本轮尚未保存为版本。旧文件可在“版本记录”下载。','muted'));};
+const saveWorkingButton=button('保存本轮修改并生成版本',async()=>{
+ if(savingWorkingVersion)return;savingWorkingVersion=true;saveWorkingButton.disabled=true;let savedResult=null;
+ try{if(editorDirty)await saveSection();if(!current.has_working_report)throw Error('当前没有待保存的修改');workingStatus.textContent='正在统一保存、附入原件并计算真实目录页码，请稍候，不会调用模型……';savedResult=await post(endpoint('save-working'),{base_version:current.report_version});loadedVersion=null;workingStatus.textContent='本轮修改已保存。';await refresh();notify(savedResult.pagination?.status==='completed'?'已保存新版本，目录已更新，可下载Word或PDF':'已保存草稿；目录尚未完成自动分页，请配置排版组件后重新保存');}
+ catch(error){workingStatus.textContent=savedResult?'新版本已经保存，但页面刷新未完成：'+error.message:'本次保存未完成：'+error.message+'。本轮编辑及已有版本保留。';throw error;}
+ finally{savingWorkingVersion=false;if(savedResult&&!current.has_working_report)workingStatus.textContent='本轮修改已保存为新版本。';saveWorkingButton.disabled=!!current?.busy||(!current?.has_working_report&&!editorDirty);}
+},'primary');saveWorkingButton.id='save-working-version';
+const renderBeforeWorkingCopy=render;render=function(project){renderBeforeWorkingCopy(project);const heading=$('#editor-card .card-heading');if(heading&&!$('#save-working-version'))heading.append(saveWorkingButton);if(!workingStatus.isConnected)$('#editor-content').prepend(workingStatus);workingStatus.textContent=savingWorkingVersion?'正在统一保存并更新目录页码，请稍候……':project.has_working_report?'本轮修改已自动暂存，可继续逐小节编辑和锁定。尚未生成下载版本；完成后请统一保存。':'编辑区就绪。改写和暂存不生成下载版本，完成本轮修改后统一保存。';saveWorkingButton.disabled=savingWorkingVersion||!!project.busy||(!project.has_working_report&&!editorDirty);$('#save-section').textContent='暂存当前编辑';if(project.has_working_report)$('#downloads').replaceChildren(el('p','本轮尚未保存为版本。旧文件可在“版本记录”下载。','muted'));};
 $('#editor-content').addEventListener('input',()=>{if(editorDirty){saveWorkingButton.disabled=!!current?.busy;workingStatus.textContent='有手动修改尚未暂存；切换小节或确认锁定时会暂存，统一保存后才生成下载版本。';}});
 function subsectionLocked(heading){return !!report?.subsection_locks?.[sectionId(report.sections[currentChapter])]?.[heading]?.locked;}
 function applyEditSubsection(){

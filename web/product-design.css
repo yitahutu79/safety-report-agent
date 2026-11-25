@@ -154,3 +154,11 @@ body{background:#f6f7f9}main{max-width:none}body[data-current-view=draft] .intro
 .attachment-original-body{overflow:auto}
 .attachment-original-body img{display:block;max-width:100%;height:auto;margin:12px auto}
 .reading-content .attachment-originals p{text-indent:0;font-size:13px}
+
+#assembly-panel{width:min(820px,calc(100vw - 48px));max-height:85vh;overflow:auto;border:1px solid #dce2e9;border-radius:14px;padding:24px;box-shadow:0 20px 80px #172b4d33;color:#253245}
+#assembly-panel::backdrop{background:#172b4d66}
+#assembly-panel>button:first-of-type{float:right}
+#assembly-panel [role=status]{background:#edf2fa;padding:14px;border-radius:8px;clear:both;line-height:1.7}
+#assembly-panel li{line-height:1.8;margin:6px 0}
+#assembly-panel details{padding:12px 0;border-top:1px solid #e5e9ef}
+.assembly-downloads{display:flex;flex-wrap:wrap;gap:12px;margin:18px 0}

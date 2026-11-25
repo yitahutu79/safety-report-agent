@@ -70,7 +70,7 @@ def write_docx(report, profile, path, figures=()):
     parts.append(paragraph('目录', 'TOCHeading'))
     parts.append('<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \\o "1-3" \\h \\z \\u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>请在 Word 中更新目录</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>')
     from .pipeline import section_identity
-    relationships = [f'<Relationship Id="rStyles" Type="{R}/styles" Target="styles.xml"/>', f'<Relationship Id="rSettings" Type="{R}/settings" Target="settings.xml"/>']
+    relationships = [f'<Relationship Id="rFooter" Type="{R}/footer" Target="footer1.xml"/>', f'<Relationship Id="rStyles" Type="{R}/styles" Target="styles.xml"/>', f'<Relationship Id="rSettings" Type="{R}/settings" Target="settings.xml"/>']
     image_files = []
     rendered_figures = []
     source_rendered = {}
@@ -176,7 +176,7 @@ def write_docx(report, profile, path, figures=()):
     size = first_section.get('pgSz', {'w': '11905', 'h': '16838'})
     margins = first_section.get('pgMar', {'top': '1417', 'right': '1134', 'bottom': '1134', 'left': '1587'})
     attrs = lambda values: ' '.join(f'w:{escape(k)}="{escape(str(v))}"' for k, v in values.items())
-    parts.append(f'<w:sectPr><w:pgSz {attrs(size)}/><w:pgMar {attrs(margins)}/></w:sectPr>')
+    parts.append(f'<w:sectPr><w:footerReference w:type="default" r:id="rFooter"/><w:pgSz {attrs(size)}/><w:pgMar {attrs(margins)}/></w:sectPr>')
     document = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W}" xmlns:r="{R}" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><w:body>{''.join(parts)}</w:body></w:document>'''
     styles = f'''<?xml version="1.0" encoding="UTF-8"?><w:styles xmlns:w="{W}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="宋体"/><w:sz w:val="28"/><w:color w:val="000000"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:line="360" w:lineRule="auto" w:after="100"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:pPr><w:ind w:firstLine="560"/></w:pPr></w:style>'''
     for sid, name, points in [('Title', 'Title', 22), ('Subtitle', 'Subtitle', 12), ('Heading1', 'heading 1', 16), ('Heading2', 'heading 2', 16), ('Heading3', 'heading 3', 14), ('Caption', 'caption', 12), ('Evidence', 'Evidence', 9), ('TableText', 'TableText', 10), ('TOCHeading', 'TOC Heading', 16)]:
@@ -198,13 +198,14 @@ def write_docx(report, profile, path, figures=()):
     if profile.get('paragraph_formats'):
         from .report_template import apply_paragraph_formats
         styles = apply_paragraph_formats(styles, profile['paragraph_formats'])
-    content_types = '''<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/></Types>'''
+    content_types = '''<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/></Types>'''
     with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as archive:
         archive.writestr('[Content_Types].xml', content_types)
         archive.writestr('_rels/.rels', f'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rDoc" Type="{R}/officeDocument" Target="word/document.xml"/></Relationships>')
         archive.writestr('word/document.xml', document)
         archive.writestr('word/styles.xml', styles)
-        archive.writestr('word/settings.xml', f'<w:settings xmlns:w="{W}"><w:updateFields w:val="true"/></w:settings>')
+        archive.writestr('word/footer1.xml',f'<w:ftr xmlns:w="{W}"><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t xml:space="preserve">第 </w:t></w:r><w:fldSimple w:instr=" PAGE " w:dirty="true"/><w:r><w:t xml:space="preserve"> 页 / 共 </w:t></w:r><w:fldSimple w:instr=" NUMPAGES " w:dirty="true"/><w:r><w:t> 页</w:t></w:r></w:p></w:ftr>')
+        archive.writestr('word/settings.xml', f'<w:settings xmlns:w="{W}"><w:view w:val="print"/><w:updateFields w:val="true"/></w:settings>')
         archive.writestr('word/_rels/document.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + ''.join(relationships) + '</Relationships>')
         for name, data in image_files:
             archive.writestr(name, data)

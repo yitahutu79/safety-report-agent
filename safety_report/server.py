@@ -39,7 +39,7 @@ from .chapter_workflow import (workflow_view, set_chapter_approval, assert_unloc
 from .report_types import DEFAULT_TYPE, REPORT_TYPES, report_profile
 
 ROOT = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent.parent))
-DOWNLOADS = {'report.docx', 'report.json', 'review.json', 'review.html', 'flow.svg', 'flow.png', 'map.png', 'map.json'}
+DOWNLOADS = {'report.pdf', 'report.docx', 'report.json', 'review.json', 'review.html', 'flow.svg', 'flow.png', 'map.png', 'map.json'}
 LOCK = threading.RLock()
 PROJECT_LOCKS = {}
 JOB_CANCELLATIONS = {}
@@ -423,6 +423,8 @@ def export_report(target, report, output, files):
     report['figure_warnings'] = warnings + placement_warnings
     state = upgrade_state(load(target / 'state.json'))
     write_docx(report, project_profile(target, state), output, figures)
+    from .pagination import paginate
+    report['pagination']=paginate(output,required=bool(report.get('assembled_at')))
 
 
 def validate_subsection_scope(data,report,chapter_ids):
@@ -783,7 +785,7 @@ class Handler(BaseHTTPRequestHandler):
             target, action = directory(match[1]), match[2] or ''
             if action.startswith('download/'):
                 name = action.split('/', 1)[1]
-                if not query.get('version') and versions.working_revision(target) and name in {'report.docx','report.json','review.json','review.html'}:return self.json({'error':'本轮编辑尚未保存为版本，请先保存；旧版本可到版本记录下载'},409)
+                if not query.get('version') and versions.working_revision(target) and name in {'report.pdf','report.docx','report.json','review.json','review.html'}:return self.json({'error':'本轮编辑尚未保存为版本，请先保存；旧版本可到版本记录下载'},409)
                 location = versions.version_directory(target, query['version'][0]) if query.get('version') else target
                 if name not in DOWNLOADS or not (location / name).is_file():
                     return self.json({'error': '文件尚未生成'}, 404)
@@ -1313,7 +1315,7 @@ class Handler(BaseHTTPRequestHandler):
                     versions.preserve_legacy(target)
                     meta=versions.commit(target,report,lambda r,p:export_report(target,r,p,state['files']),kind='edit',description='用户确认保存本轮编辑（统一生成可下载版本）')
                     state_update(target,report_version=meta['id'],message='本轮修改已保存为一个版本，可下载；已有历史版本保留',error='')
-                    return self.json({'ok':True,'version':meta['id']})
+                    return self.json({'ok':True,'version':meta['id'],'pagination':report.get('pagination',{}),'pdf_ready':(target/'report.pdf').exists()})
                 if action=='reuse-source-table':
                     from .table_reuse import source_tables,insert_source_table
                     if data.get('base_version','')!=state.get('report_version',''):raise ValueError('报告已有新版本，请刷新后再插入原表')
@@ -1439,6 +1441,9 @@ class Handler(BaseHTTPRequestHandler):
                     from .report_appendices import build as build_appendices
                     report['appendix_manifest']=build_appendices(target,report,state['files'])
                     checks=assembly_checks(report,state,workflow,project_profile(target,state),quality)
+                    from .pagination import find_engine
+                    if os.environ.get('SAFETY_PAGINATION_MODE')!='off' and not find_engine():
+                        checks['can_assemble']=False;checks['blockers'].append('本机尚未配置文档排版组件，请安装LibreOffice后再生成带真实目录页码的总稿')
                     if action=='assembly-check':return self.json(checks)
                     if not checks['can_assemble']:raise ValueError('暂不能组稿：'+'；'.join(checks['blockers'][:5]))
                     if checks['warnings'] and data.get('acknowledge_warnings') is not True:raise ValueError('请先查看并确认组稿提示')
@@ -1447,7 +1452,7 @@ class Handler(BaseHTTPRequestHandler):
                     versions.preserve_legacy(target)
                     meta=versions.commit(target,report,lambda r,p:export_report(target,r,p,state['files']),kind='assembly',description='按已确认章节排序组装总稿（未调用模型）')
                     state_update(target,report_version=meta['id'],report_outdated=False,source_changes_pending=False,message='已组装总稿，未调用模型；请下载 Word 并完成专业审核')
-                    return self.json({'ok':True,'version':meta['id']})
+                    return self.json({'ok':True,'version':meta['id'],'pdf_ready':(target/'report.pdf').exists()})
                 if action == 'clear-node-progress':
                     (target / 'node-checkpoints.json').unlink(missing_ok=True)
                     (target / 'preflight-checkpoints.json').unlink(missing_ok=True)

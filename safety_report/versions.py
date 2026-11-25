@@ -45,6 +45,7 @@ def audit(report):
         'chapters': [{'title': s['title'], 'missing': s.get('missing', []), 'review': s.get('review', [])} for s in report['sections']],
         'structure_changes': report.get('structure_changes', []),
         'appendix_manifest':report.get('appendix_manifest',{}),
+        'pagination':report.get('pagination',{}),
         'professional_links':report.get('professional_links',[]),
         'template_reuse_records': [{'title':s['title'],'items':s.get('template_reuse_records',[])} for s in report['sections'] if s.get('template_reuse_records')],
         'figure_warnings': report.get('figure_warnings', []), 'generation_errors': report.get('generation_errors', []),
@@ -124,14 +125,15 @@ def commit(target, report, export, kind='generation', description=''):
         (temp / 'review.html').write_text(review_html(report), encoding='utf-8')
         meta = {'id': ident, 'created_at': datetime.now(timezone.utc).isoformat(), 'kind': kind,
                 'description': description[:200], 'mode': report.get('mode', 'legacy'), 'model_name': report.get('model_name', ''),
-                'updated_chapters': report.get('updated_chapters', []), 'status': report.get('status', 'draft')}
+                'updated_chapters': report.get('updated_chapters', []), 'status': report.get('status', 'draft'),'pdf_ready':(temp/'report.pdf').exists(),'pagination':report.get('pagination',{})}
         (temp / 'meta.json').write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
         final = target / 'versions' / ident
         temp.rename(final)
-        for name in ('report.docx', 'report.json', 'review.json', 'review.html'):
+        for name in ('report.docx', 'report.json', 'review.json', 'review.html')+ (('report.pdf',) if (final/'report.pdf').exists() else ()):
             pending = target / ('.' + name + '.tmp')
             shutil.copyfile(final / name, pending)
             pending.replace(target / name)
+        if not (final/'report.pdf').exists():(target/'report.pdf').unlink(missing_ok=True)
         (target/'working-report.json').unlink(missing_ok=True)
         return meta
     finally:
