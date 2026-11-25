@@ -143,7 +143,7 @@ def resolve_figure_placements(report, figures):
             elif location.get('paragraph_index') is not None:
                 expected = location.get('paragraph_hash', '')
                 matches = [i for i, p in enumerate(section.get('paragraphs', []))
-                           if hashlib.sha256(p.get('text', '').encode('utf-8')).hexdigest() == expected]
+                           if hashlib.sha256(p.get('text', '').encode('utf-8')).hexdigest() == expected and (not location.get('heading') or p.get('heading',section['title'])==location['heading'])]
                 if len(matches) == 1:
                     location['paragraph_index'] = matches[0]
                 else:

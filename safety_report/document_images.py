@@ -135,11 +135,8 @@ def insert(report,item,data):
     if heading not in [section['title']]+section.get('subheadings',[]):raise ValueError('小节已变化，请重新选择')
     caption=data.get('caption',item['caption'])
     if not isinstance(caption,str) or not 1<=len(caption.strip())<=160:raise ValueError('请填写1至160字图题')
-    anchor={};index=data.get('paragraph_index')
-    if index is not None:
-        text=data.get('paragraph_text');matches=[i for i,p in enumerate(section.get('paragraphs',[])) if p.get('text')==text and p.get('heading',section['title'])==heading]
-        if len(matches)!=1:raise ValueError('选定段落已修改、重复或移动，请重新选择插入位置')
-        index=matches[0];anchor={'paragraph_index':index,'paragraph_hash':hashlib.sha256(text.encode()).hexdigest(),'paragraph_text':text}
+    from .content_order import paragraph_anchor,next_insertion_order
+    anchor=paragraph_anchor(section,heading,data.get('paragraph_index'),data.get('paragraph_text'))
     eid='source-image-'+item['id']
     replacement=data.get('replace_figure_id')
     if replacement:
@@ -147,7 +144,7 @@ def insert(report,item,data):
         if len(matches)!=1:raise ValueError('需要调整的图件已变化，请刷新')
         for s in result['sections']:s['figures']=[f for f in s.get('figures',[]) if f['id']!=replacement]
     figure={'id':replacement or uuid.uuid4().hex,'asset_id':item['id'],'source_file_id':item['source_file_id'],'source_sha256':item['source_sha256'],
-            'source_file':item['source_file'],'source_locator':item['locator'],'caption':caption.strip(),'heading':heading,'evidence_ids':[eid],**anchor}
+            'source_file':item['source_file'],'source_locator':item['locator'],'caption':caption.strip(),'heading':heading,'insertion_order':next_insertion_order(section),'evidence_ids':[eid],**anchor}
     section.setdefault('figures',[]).append(figure)
     if not any(e['id']==eid for e in result.setdefault('evidence',[])):result['evidence'].append({'id':eid,'source':item['source_file'],'sha256':item['source_sha256'],
         'source_file_id':item['source_file_id'],'locator':item['locator'],'text':'来源图件：'+item['source_file']+' '+item['locator'],'corpus':'project_evidence','evidence_type':'source_image','original_verified':False})
@@ -163,5 +160,5 @@ def collect(target,report,files):
             if figure['source_sha256']!=file['sha256']:raise ValueError('已插入图片的来源版本已变化，请重新选择')
             location={'section_id':section_identity(section),'heading':figure['heading']}
             if 'paragraph_index' in figure:location.update({k:figure[k] for k in ('paragraph_index','paragraph_hash')})
-            result.append({'path':str(render(target,file,item)),'caption':figure['caption'],'source':'','placement':location,'source_image':True})
+            result.append({'path':str(render(target,file,item)),'caption':figure['caption'],'source':'','placement':location,'source_image':True,'document_figure_id':figure['id']})
     return result

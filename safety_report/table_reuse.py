@@ -92,7 +92,7 @@ def source_tables(target,files,file_id=None):
     return result
 
 
-def insert_source_table(report,item,section_id,heading):
+def insert_source_table(report,item,section_id,heading,paragraph_index=None,paragraph_text=None):
     from .pipeline import section_identity
     if not item.get('reuse_supported',True):raise ValueError('原表含图片、嵌套表或嵌入对象，请转换为PDF，通过原件附录保留，避免丢失内容')
     result=copy.deepcopy(report);section=next((s for s in result['sections'] if section_identity(s)==section_id),None)
@@ -100,6 +100,8 @@ def insert_source_table(report,item,section_id,heading):
     if any(t.get('source_table_id')==item['id'] and t.get('heading')==heading for t in section.get('tables',[])):raise ValueError('本小节已经复用了这张原表，请直接编辑现有表格')
     eid='source-table-'+hashlib.sha256((item['id']+item['source_table_hash']).encode()).hexdigest()[:24]
     table={k:copy.deepcopy(item[k]) for k in ('caption','headers','rows','source_table_layout')}
+    from .content_order import paragraph_anchor,next_insertion_order
+    table.update(insertion_order=next_insertion_order(section),**paragraph_anchor(section,heading,paragraph_index,paragraph_text))
     table.update(heading=heading,evidence_ids=[eid],source_table_id=item['id'],source_table_hash=item['source_table_hash'],report_source_reused=True,
                  source_file=item['source_file'],source_locator=item['source_locator'])
     refs={e['id']:e for e in result.get('evidence',[])}

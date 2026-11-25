@@ -172,23 +172,22 @@ showQa=function(project){qaRenderBeforeEditorial(project);const box=$('#qa-resul
 let editorialMode='read';
 function drawReadingView(){
  const preview=$('#reading-content');if(!preview||!report)return;preview.replaceChildren();
- const section=report.sections[currentChapter];let heading='';
- for(const row of $('#paragraph-editor').querySelectorAll('.paragraph-block')){
-  if(row.hidden)continue;
-  const title=row.querySelector('select').value;
-  if(title&&title!==section.title&&title!==heading){preview.append(el('h4',title));heading=title;}
-  preview.append(el('p',row.querySelector('textarea').value||'（空段落）'));
-  if(typeof appendDocumentFigurePreview==='function')appendDocumentFigurePreview(preview,Number(row.dataset.originalIndex));
+ const section=report.sections[currentChapter],rows=[...$('#paragraph-editor').querySelectorAll('.paragraph-block')],tables=[...$('#table-editor').querySelectorAll('.editor-table')];
+ const live={...section,paragraphs:rows.map((row,i)=>({...section.paragraphs[Number(row.dataset.originalIndex??i)],heading:row.querySelector('select').value,text:row.querySelector('textarea').value}))};
+ const scope=$('#subsection-edit-toolbar select')?.value||'';
+ for(const block of reportPreviewOrder(live,scope)){
+  if(block.kind==='heading'){if(block.heading!==section.title)preview.append(el('h4',block.heading));continue;}
+  if(block.kind==='paragraph'){preview.append(el('p',live.paragraphs[block.index].text||'（空段落）'));continue;}
+  if(block.kind==='figure'){if(typeof renderDocumentFigurePreview==='function')preview.append(renderDocumentFigurePreview(section.figures[block.index],block.stale));continue;}
+  const source=tables[block.index];if(!source)continue;
+  preview.append(el('h4',source.querySelector('h3').textContent));const wrap=el('div',undefined,'reading-table-wrap'),table=el('table');
+  for(const original of source.querySelectorAll('tr')){const tr=el('tr');for(const cell of original.children){const copy=el(cell.tagName==='TH'?'th':'td',cell.querySelector('textarea')?.value??cell.textContent);copy.rowSpan=cell.rowSpan;copy.colSpan=cell.colSpan;tr.append(copy);}table.append(tr);}wrap.append(table);preview.append(wrap);
+  if(block.stale)preview.append(el('small','表格原插入段落已变化，请重新选择位置。','conflict'));
  }
- for(const source of $('#table-editor').querySelectorAll('.editor-table')){
-  if(source.hidden)continue;
-  preview.append(el('h4',source.querySelector('h3').textContent));const wrap=el('div',undefined,'reading-table-wrap');const table=el('table');
-  for(const original of source.querySelectorAll('tr')){const tr=el('tr');for(const cell of original.children){const copy=el(cell.tagName==='TH'?'th':'td',cell.querySelector('textarea').value);copy.rowSpan=cell.rowSpan;copy.colSpan=cell.colSpan;tr.append(copy);}table.append(tr);}wrap.append(table);preview.append(wrap);
- }
- if(typeof appendDocumentFigurePreview==='function')appendDocumentFigurePreview(preview,null);
  if(!preview.children.length)preview.append(el('p','当前范围暂无正文。可以使用右侧编写助手生成，或切换编辑补充内容。','reading-empty'));
- const count=[...$('#paragraph-editor').querySelectorAll('textarea')].reduce((n,x)=>n+x.value.replace(/\s/g,'').length,0);
- $('#reading-meta').textContent=count+' 字 · '+$('#table-editor').children.length+' 张表 · '+(editorDirty?'含未暂存修改':current?.has_working_report?'本轮编辑暂存，未生成版本':'已保存版本')+' · 图件及分页以 Word 为准';
+ let editing=$('#editing-layout-preview');if(!editing){editing=el('details');editing.id='editing-layout-preview';$('#paragraph-editor').before(editing);}editing.replaceChildren(el('summary','图文排版预览 · 与阅读模式相同顺序'));const copy=el('div',undefined,'editing-layout-content');for(const node of preview.children)copy.append(node.cloneNode(true));editing.append(copy);
+ const count=live.paragraphs.filter(p=>reportHeadingInScope(p.heading,scope)).reduce((n,p)=>n+p.text.replace(/\s/g,'').length,0);
+ $('#reading-meta').textContent=count+' 字 · 图表按正文位置编排 · '+(editorDirty?'含未暂存修改':current?.has_working_report?'本轮编辑暂存，未生成版本':'已保存版本');
 }
 function setEditorialMode(mode){editorialMode=mode;const paper=$('.chapter-paper');if(!paper)return;paper.dataset.mode=mode;for(const b of paper.querySelectorAll('.paper-mode')){b.classList.toggle('active',b.dataset.mode===mode);b.setAttribute('aria-pressed',String(b.dataset.mode===mode));}drawReadingView();}
 const editorBeforeEditorial=renderEditor;

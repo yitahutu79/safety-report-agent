@@ -73,6 +73,7 @@ def write_docx(report, profile, path, figures=()):
     relationships = [f'<Relationship Id="rStyles" Type="{R}/styles" Target="styles.xml"/>', f'<Relationship Id="rSettings" Type="{R}/settings" Target="settings.xml"/>']
     image_files = []
     rendered_figures = []
+    source_rendered = {}
     original_pages=[]
     section_format=(profile.get('sections') or [{}])[0]
     page_size=section_format.get('pgSz',{'w':'11905','h':'16838'})
@@ -93,7 +94,9 @@ def write_docx(report, profile, path, figures=()):
         image_parts = [paragraph(figure['caption'], 'Caption'), image_paragraph(rid, index, width, height)]
         if figure.get('source'):
             image_parts.append(paragraph(figure['source'], 'Evidence'))
-        rendered_figures.append((figure.get('placement') or {}, image_parts))
+        entry=(figure.get('placement') or {}, image_parts)
+        if figure.get('document_figure_id'):source_rendered[figure['document_figure_id']]=entry
+        else:rendered_figures.append(entry)
     for section in report['sections']:
         section_id = section_identity(section)
         basis_section = (report.get('report_type', 'facility_design') == 'facility_design'
@@ -104,7 +107,7 @@ def write_docx(report, profile, path, figures=()):
             for t in section.get('tables',[]):
                 if t.get('source_table_id'):
                     parts.append(paragraph(t['caption'],'Caption'));parts.append(table(t['headers'],t['rows'],layout=t.get('source_table_layout')))
-            for location,image_parts in rendered_figures:
+            for location,image_parts in list(rendered_figures)+list(source_rendered.values()):
                 if location.get('section_id')==section_id:
                     if location.get('heading') and location['heading']!=section['title']:
                         number=re.match(r'^\d+(?:\.\d+)*',location['heading']);level=min(3,len(number.group().split('.'))) if number else 2
@@ -113,52 +116,47 @@ def write_docx(report, profile, path, figures=()):
             continue
         if section.get('generation_status') == 'failed' or section.get('needs_rewrite') or section.get('generation_error'):
             parts.append(paragraph('本章未通过生成检查，本次导出不包含旧版正文。请在工作台单独重试本章；失败信息见核对清单。'))
-            for location,image_parts in rendered_figures:
+            for location,image_parts in list(rendered_figures)+list(source_rendered.values()):
                 if location.get('section_id')==section_id:
                     if location.get('heading') and location['heading']!=section['title']:
                         number=re.match(r'^\d+(?:\.\d+)*',location['heading']);level=min(3,len(number.group().split('.'))) if number else 2
                         parts.append(paragraph(location['heading'],'Heading'+str(level)))
                     parts.extend(image_parts)
             continue
-        all_items = [('paragraph', p) for p in section.get('paragraphs', [])] + [('table', t) for t in section.get('tables', [])]
-        if all('source_order' in item for _,item in all_items):all_items.sort(key=lambda pair:pair[1]['source_order'])
-        filled = {item.get('heading', section['title']) for _, item in all_items}
-        filled.update(location['heading'] for location,_ in rendered_figures if location.get('section_id')==section_id and location.get('heading'))
-        visible = set(filled)
-        # 只显示有正文的子节及其父级，避免一百多个空标题和占位句。
-        for heading in section.get('subheadings', []):
-            number = re.match(r'\d+(?:\.\d+)*', heading)
-            if number and any(re.match(rf"^{re.escape(number.group())}\.\d", child) for child in filled):
-                visible.add(heading)
-        for heading in [section['title']] + section.get('subheadings', []):
-            if heading != section['title']:
-                if heading not in visible:
-                    continue
-                match = re.match(r'\d+(?:\.\d+)*', heading)
-                level = len(match.group().split('.')) if match else 2
-                heading_style = 'BasisHeading2' if basis_section and level == 2 else 'Heading' + str(min(level, 3))
-                parts.append(paragraph(heading, heading_style))
-            for kind, item in all_items:
-                if item.get('heading', section['title']) != heading:
-                    continue
-                if kind == 'paragraph':
-                    parts.append(paragraph(item['text'], 'BasisEntry' if basis_section else 'Normal'))
-                    position = next((i for i, p in enumerate(section.get('paragraphs', [])) if p is item), None)
-                    for location, image_parts in rendered_figures:
-                        if location.get('section_id') == section_id and location.get('paragraph_index') is not None and location.get('paragraph_index') == position:
-                            parts.extend(image_parts)
-                else:
-                    parts.append(paragraph(item['caption'], 'Caption'))
-                    parts.append(table(item['headers'], item['rows'],layout=item.get('source_table_layout')))
-            for location,image_parts in rendered_figures:
-                if location.get('section_id')==section_id and location.get('heading')==heading and location.get('paragraph_index') is None:parts.extend(image_parts)
-        if not all_items and not section.get('figures'):
-            parts.append(paragraph('本章尚待补充项目资料。'))
-        for location, image_parts in rendered_figures:
-            if location.get('section_id') == section_id and not location.get('heading') and location.get('paragraph_index') is None:
-                parts.extend(image_parts)
+        from .content_order import order_content
+        blocks=order_content(section)
+        active_heading=None
+        def legacy_heading_figures(heading):
+            return [image_parts for location,image_parts in rendered_figures if location.get('section_id')==section_id and location.get('heading')==heading and location.get('paragraph_index') is None]
+        for block in blocks:
+            kind=block['kind'];heading=block['heading']
+            if kind=='heading':
+                if active_heading is not None:
+                    for image_parts in legacy_heading_figures(active_heading):parts.extend(image_parts)
+                active_heading=heading
+                if heading!=section['title']:
+                    match=re.match(r'\d+(?:\.\d+)*',heading);level=len(match.group().split('.')) if match else 2
+                    parts.append(paragraph(heading,'BasisHeading2' if basis_section and level==2 else 'Heading'+str(min(level,3))))
+            elif kind=='paragraph':
+                item=section['paragraphs'][block['index']]
+                parts.append(paragraph(item['text'],'BasisEntry' if basis_section else 'Normal'))
+                for location,image_parts in rendered_figures:
+                    if location.get('section_id')==section_id and location.get('paragraph_index')==block['index']:parts.extend(image_parts)
+            elif kind=='table':
+                item=section['tables'][block['index']]
+                parts.append(paragraph(item['caption'],'Caption'))
+                parts.append(table(item['headers'],item['rows'],layout=item.get('source_table_layout')))
+            elif kind=='figure':
+                entry=source_rendered.get(section['figures'][block['index']]['id'])
+                if entry and entry[0].get('section_id')==section_id:parts.extend(entry[1])
+        if active_heading is not None:
+            for image_parts in legacy_heading_figures(active_heading):parts.extend(image_parts)
+        # Legacy project figures without document-image IDs retain their declared placement.
+        for location,image_parts in rendered_figures:
+            if location.get('section_id')==section_id and not location.get('heading') and location.get('paragraph_index') is None:parts.extend(image_parts)
+        if not blocks:parts.append(paragraph('本章尚待补充项目资料。'))
     # 缺失项、审阅意见和证据追溯在独立 review.html / JSON 中呈现，不穿插正文。
-    appendix_figures = [image_parts for location, image_parts in rendered_figures if not location.get('section_id')]
+    appendix_figures = [image_parts for location, image_parts in list(rendered_figures)+list(source_rendered.values()) if not location.get('section_id')]
     if appendix_figures:
         parts.append(paragraph('项目图件', 'Heading1'))
         for image_parts in appendix_figures:

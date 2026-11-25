@@ -715,7 +715,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             parsed = urlsplit(self.path)
             path, query = parsed.path, parse_qs(parsed.query)
-            static = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8'), '/experience.css': ('experience.css', 'text/css; charset=utf-8'), '/product-design.css': ('product-design.css', 'text/css; charset=utf-8'), '/product-design.js': ('product-design.js', 'text/javascript; charset=utf-8'), '/workspace-upgrades.js': ('workspace-upgrades.js','text/javascript; charset=utf-8'), '/brand-mark.svg': ('brand-mark.svg', 'image/svg+xml'), '/manifest.webmanifest': ('manifest.webmanifest', 'application/manifest+json')}
+            static = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8'), '/experience.css': ('experience.css', 'text/css; charset=utf-8'), '/product-design.css': ('product-design.css', 'text/css; charset=utf-8'), '/product-design.js': ('product-design.js', 'text/javascript; charset=utf-8'), '/report-preview.js': ('report-preview.js','text/javascript; charset=utf-8'), '/workspace-upgrades.js': ('workspace-upgrades.js','text/javascript; charset=utf-8'), '/brand-mark.svg': ('brand-mark.svg', 'image/svg+xml'), '/manifest.webmanifest': ('manifest.webmanifest', 'application/manifest+json')}
             if path in static:
                 name, mime = static[path]
                 return self.send_bytes(200, (ROOT / 'web' / name).read_bytes(), mime)
@@ -1316,7 +1316,7 @@ class Handler(BaseHTTPRequestHandler):
                     ident=data.get('section_id','');assert_unlocked(load(target/'chapter-workflow.json',{}),[ident])
                     item=next((t for t in source_tables(target,state['files'],data.get('file_id')) if t['id']==data.get('table_id')),None)
                     if not item or item['source_table_hash']!=data.get('source_table_hash'):raise ValueError('原表或来源已变化，请刷新预览')
-                    report=insert_source_table(existing,item,ident,data.get('heading',''))
+                    report=insert_source_table(existing,item,ident,data.get('heading',''),data.get('paragraph_index'),data.get('paragraph_text'))
                     from .subsection_locks import assert_unchanged
                     assert_unchanged(existing,report,load(target/'chapter-workflow.json',{}))
                     report['quality_review']=project_quality(target,report,state)

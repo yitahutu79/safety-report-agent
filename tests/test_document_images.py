@@ -134,3 +134,15 @@ def test_picture_only_subsection_can_be_confirmed_without_inventing_text():
     r=report();r['sections'][0]['paragraphs']=[];r['sections'][0]['figures']=[{'id':'picture','heading':'1.1 工艺','caption':'工艺示意图'}]
     workflow={};set_lock(r,workflow,'1','1.1 工艺',True)
     assert workflow['subsections']['1']['1.1 工艺']['locked']
+
+
+def test_picture_and_table_are_between_paragraphs_in_same_subsection(tmp_path):
+    from safety_report.content_order import paragraph_anchor
+    (tmp_path/'uploads').mkdir();make_docx(tmp_path/'uploads'/'source.docx');f=file();item=images.catalog(tmp_path,f)['items'][0]
+    old=report();section=old['sections'][0];section['paragraphs'].insert(1,{'heading':'1.1 工艺','text':'图后的工艺解释。','evidence_ids':[]})
+    result=images.insert(old,item,{'section_id':'1','heading':'1.1 工艺','caption':'段中工艺图','paragraph_index':0,'paragraph_text':'图前的工艺说明。'})
+    result['sections'][0]['tables']=[{'heading':'1.1 工艺','caption':'段中设备表','headers':['设备'],'rows':[['印刷机']], 'insertion_order':2,**paragraph_anchor(result['sections'][0],'1.1 工艺',0,'图前的工艺说明。')}]
+    figures=assets.resolve_figure_placements(result,images.collect(tmp_path,result,[f]))[0]
+    out=tmp_path/'inline.docx';server.write_docx(result,{},out,figures)
+    with zipfile.ZipFile(out) as z:xml=z.read('word/document.xml').decode()
+    assert xml.index('图前的工艺说明。')<xml.index('段中工艺图')<xml.index('段中设备表')<xml.index('图后的工艺解释。')<xml.index('后面的小节。')

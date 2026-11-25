@@ -202,8 +202,14 @@ def apply_edits(report, changed_sections, add_chapter=None, delete_chapter_ids=N
                 if not all(isinstance(cell, str) and len(cell) <= 10000 for row in [table['headers']] + rows for cell in row):
                     raise ValueError('表格内容必须是长度合理的文本')
                 from .table_reuse import synchronize_merged_edits
-                revised_tables.append(synchronize_merged_edits(original,{**original, 'headers': table['headers'], 'rows': rows,
-                    'human_edited': original.get('human_edited', False) or table['headers'] != original['headers'] or rows != original['rows']}))
+                revised={**original,'headers':table['headers'],'rows':rows,
+                    'human_edited':original.get('human_edited',False) or table['headers']!=original['headers'] or rows!=original['rows']}
+                if table.get('insertion_order')!=original.get('insertion_order'):
+                    from .content_order import paragraph_anchor,next_insertion_order
+                    for key in ('paragraph_index','paragraph_text','paragraph_hash'):revised.pop(key,None)
+                    revised.update(paragraph_anchor(section,original.get('heading',section['title']),table.get('paragraph_index'),table.get('paragraph_text')),
+                                   insertion_order=next_insertion_order(section),human_edited=True)
+                revised_tables.append(synchronize_merged_edits(original,revised))
             section['tables'] = revised_tables
         changed.add(section.get('id') or (re.match(r'\d+', section['title']).group() if re.match(r'\d+', section['title']) else ''))
     if add_chapter is not None:
