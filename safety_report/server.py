@@ -727,6 +727,8 @@ class Handler(BaseHTTPRequestHandler):
             static['/design-themes.css'] = ('design-themes.css', 'text/css; charset=utf-8')
             static['/studio-ui.js'] = ('studio-ui.js', 'text/javascript; charset=utf-8')
             static['/studio-ui.css'] = ('studio-ui.css', 'text/css; charset=utf-8')
+            static['/fonts/LXGWWenKai-Regular.ttf'] = ('fonts/LXGWWenKai-Regular.ttf', 'font/ttf')
+            static['/fonts/NotoSerifSC-Regular.otf'] = ('fonts/NotoSerifSC-Regular.otf', 'font/otf')
             icon_match = re.fullmatch(r'/ui-icons/([a-z0-9-]+\.svg)', path)
             if icon_match:
                 icon_path = ROOT / 'web' / 'ui-icons' / icon_match[1]

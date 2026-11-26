@@ -84,7 +84,7 @@ listProjects=async function(){
  projects.forEach((project,index)=>{
   const original=buttons[index];if(!original)return;
   const row=el('div',undefined,'project-list-row');original.before(row);row.append(original);
-  const remove=button('移入回收站',async()=>{
+  const remove=button('',async()=>{
    if(project.id===selected&&(current?.busy||preflightBusy))throw Error('项目正在处理，请先停止或等待完成');
    const name=prompt('项目将移入回收站，资料、草稿及版本会一并保留，可从回收站恢复。\n请输入完整项目名称以确认：\n'+project.name);
    if(name===null)return;if(name!==project.name)throw Error('项目名称不匹配，未删除');
@@ -92,7 +92,7 @@ listProjects=async function(){
    await post('/api/projects/'+project.id+'/trash',{name});
    if(project.id===selected){clearTimeout(polling);selected=null;current=null;report=null;loadedVersion=null;factsDirty=false;editorDirty=false;dirtyFileForms.clear();dirtyAssetForms.clear();dirtyLedgers.clear();clearProfessional();localStorage.removeItem('safety-selected');const remaining=await listProjects();if(remaining.length)await selectProject(remaining[0].id);else{$('#workspace').classList.add('hidden');$('#welcome').classList.remove('hidden');$('#project-title').textContent='从项目资料，到可修改的报告';if(typeof heroActions!=='undefined')heroActions.classList.add('hidden');showView('materials');}}
    else await listProjects();notify('项目已移入回收站，可以恢复');
-  },'project-trash-button');remove.setAttribute('aria-label','将'+project.name+'移入回收站');row.append(remove);
+  },'project-trash-button');remove.setAttribute('aria-label','将'+project.name+'移入回收站');remove.title='移入回收站';const trashIcon=el('img',undefined,'studio-icon');trashIcon.src='/ui-icons/trash.svg';trashIcon.alt='';trashIcon.setAttribute('aria-hidden','true');remove.append(trashIcon);row.append(remove);
  });
  return projects;
 };

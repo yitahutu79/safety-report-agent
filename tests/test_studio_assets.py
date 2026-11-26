@@ -18,6 +18,10 @@ def test_studio_assets_are_served_locally(tmp_path, monkeypatch):
                 assert response.status == 200
                 assert response.headers.get_content_type() == content_type
                 assert len(response.read()) > 100
+        for name, mime in [('LXGWWenKai-Regular.ttf', 'font/ttf'), ('NotoSerifSC-Regular.otf', 'font/otf')]:
+            with urlopen(base + '/fonts/' + name, timeout=5) as response:
+                assert response.headers.get_content_type() == mime
+                assert len(response.read()) > 100_000
         icons = list((server.ROOT / 'web' / 'ui-icons').glob('*.svg'))
         assert icons
         for icon in icons:
