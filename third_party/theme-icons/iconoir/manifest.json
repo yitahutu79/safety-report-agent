@@ -1,0 +1,116 @@
+{
+  "prefix": "iconoir",
+  "source": "https://raw.githubusercontent.com/iconify/icon-sets/master/json/iconoir.json",
+  "sha256": "5e304cea2aa2ef86e3b126422b17c3475e7a6e776799df240d1993804d9546dd",
+  "info": {
+    "name": "Iconoir",
+    "total": 1671,
+    "version": "7.12.2",
+    "author": {
+      "name": "Luca Burgio",
+      "url": "https://github.com/iconoir-icons/iconoir"
+    },
+    "license": {
+      "title": "MIT",
+      "spdx": "MIT",
+      "url": "https://github.com/iconoir-icons/iconoir/blob/main/LICENSE"
+    },
+    "samples": [
+      "chat-bubble-check",
+      "edit",
+      "activity",
+      "check",
+      "droplet",
+      "hashtag"
+    ],
+    "height": 24,
+    "category": "UI 24px",
+    "tags": [
+      "Has Padding",
+      "Uses Stroke"
+    ],
+    "palette": false
+  },
+  "icons": {
+    "folders": {
+      "name": "iconoir:folder",
+      "file": "web/ui-icons/iconoir-folders.svg",
+      "sha256": "ed962351a85439f277bd81397342e18795793247d1f9c15a5e39598411faee34"
+    },
+    "identification-card": {
+      "name": "iconoir:profile-circle",
+      "file": "web/ui-icons/iconoir-identification-card.svg",
+      "sha256": "e6442ebfc13b369e4679d0ecdaa9ce09e79939b512d4dfe4608ae54d4e62eb38"
+    },
+    "image": {
+      "name": "iconoir:media-image",
+      "file": "web/ui-icons/iconoir-image.svg",
+      "sha256": "cc6c466fbdc0a9bcf41684dea8e329745bd1c06d19646227d6ae019fa0c5ddee"
+    },
+    "database": {
+      "name": "iconoir:database",
+      "file": "web/ui-icons/iconoir-database.svg",
+      "sha256": "97ef70af98ff4839bdc4fb861568165f2e2dcc5f07895faff7bb426d00c76225"
+    },
+    "note-pencil": {
+      "name": "iconoir:edit-pencil",
+      "file": "web/ui-icons/iconoir-note-pencil.svg",
+      "sha256": "42309a84e9d8c84bbe247a25494c814ab1d7d6af103b24dc7474d8532f2d93b0"
+    },
+    "shield-check": {
+      "name": "iconoir:shield-check",
+      "file": "web/ui-icons/iconoir-shield-check.svg",
+      "sha256": "52b447f706198a79075f1db5f0b131390a0a859486b997bd3dc8f0b89bd90b49"
+    },
+    "calculator": {
+      "name": "iconoir:calculator",
+      "file": "web/ui-icons/iconoir-calculator.svg",
+      "sha256": "24ad90f3e8ca5b8359ecfec6b2b38b14b14cad9b742770880c83bae6149ab53e"
+    },
+    "list-checks": {
+      "name": "iconoir:task-list",
+      "file": "web/ui-icons/iconoir-list-checks.svg",
+      "sha256": "7d31b477743ce26bb377c338b11ad3aaa1495892c77c4b165c2eaa151a26d960"
+    },
+    "chat-circle-dots": {
+      "name": "iconoir:chat-bubble",
+      "file": "web/ui-icons/iconoir-chat-circle-dots.svg",
+      "sha256": "972b0ca4ef6f4b768c7afbb560b1c2fab66fcc35398d793709e558aceef5ebdf"
+    },
+    "books": {
+      "name": "iconoir:book-stack",
+      "file": "web/ui-icons/iconoir-books.svg",
+      "sha256": "49b9e6560c8639971b411fbfec49371d650dd33e9bb715233120cb6f94a081c0"
+    },
+    "target": {
+      "name": "iconoir:archery",
+      "file": "web/ui-icons/iconoir-target.svg",
+      "sha256": "45c9f1737e286cf632736f580b1f5c0c77a2dfd54760eaae4690b80e9ce2bb22"
+    },
+    "clock-counter-clockwise": {
+      "name": "iconoir:clock-rotate-right",
+      "file": "web/ui-icons/iconoir-clock-counter-clockwise.svg",
+      "sha256": "0dbfa7cb64895758b012aa160cfd72835fad79d152d83ba04a7dcfd042ffa115"
+    },
+    "clipboard-text": {
+      "name": "iconoir:clipboard-check",
+      "file": "web/ui-icons/iconoir-clipboard-text.svg",
+      "sha256": "c1a1e9812c6d39e532e99d08c9ec6f76095590544e2d4c8316feee137c94691d"
+    },
+    "cloud-arrow-down": {
+      "name": "iconoir:cloud-download",
+      "file": "web/ui-icons/iconoir-cloud-arrow-down.svg",
+      "sha256": "058ddeca43e594d7de1abafa21a6409197c04582441ff83a86d072de57d9303a"
+    },
+    "magnifying-glass": {
+      "name": "iconoir:search",
+      "file": "web/ui-icons/iconoir-magnifying-glass.svg",
+      "sha256": "b705269b6a89a8cf3a9a2c52cae67b591d5c59529e4dbe07dee4214d3dd2e219"
+    },
+    "chart-bar": {
+      "name": "iconoir:stats-up-square",
+      "file": "web/ui-icons/iconoir-chart-bar.svg",
+      "sha256": "56f6bdfea6456b9f78f0d729a2d164d360599c0329a07b6591954ae7e63f0bdd"
+    }
+  }
+}

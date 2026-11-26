@@ -5,13 +5,15 @@ const designProfiles=[
  {id:'claude',name:'暖色阅读',source:'Claude',description:'纸色画布 · 编辑式标题 · 安静阅读',layout:'list'},
  {id:'linear',name:'深色专业',source:'Linear',description:'深色表面 · 紧凑列表 · 专注编写',layout:'list'},
  {id:'apple',name:'极简银白',source:'Apple · awesome-design-md',description:'银白画布 · 宽松阅读 · 圆润控件',layout:'list'},
- {id:'stripe',name:'商务靛蓝',source:'Stripe · awesome-design-md',description:'深蓝侧栏 · 精细分区 · 紧凑工作台',layout:'list'}
+ {id:'stripe',name:'商务靛蓝',source:'Stripe · awesome-design-md',description:'深蓝侧栏 · 精细分区 · 紧凑工作台',layout:'list'},
+ {id:'fashion',name:'时尚莓红',source:'编辑式排版',description:'莓红大色块 · 杂志标题 · 轻盈留白',layout:'cards'},
+ {id:'vivid',name:'活力撞色',source:'明亮对比配色',description:'珊瑚橙 × 薄荷绿 · 大胆图形 · 活泼卡片',layout:'cards'}
 ];
 const designPreference='safety-design-profile';const designLayoutPreference='safety-knowledge-layout';
 function readDesignPreference(key){try{return localStorage.getItem(key);}catch{return null;}}
 function saveDesignPreference(key,value){try{localStorage.setItem(key,value);}catch{/* Appearance still works when browser storage is unavailable. */}}
 const appearanceDialog=el('dialog',undefined,'design-picker');appearanceDialog.id='design-picker';appearanceDialog.setAttribute('aria-labelledby','design-picker-title');
-const appearanceBar=el('div',undefined,'design-picker-heading');const appearanceCopy=el('div');const appearanceTitle=el('h2','选择你的工作空间');appearanceTitle.id='design-picker-title';appearanceCopy.append(appearanceTitle,el('p','五套工作空间，切换后立即预览。仅改变网页外观。'));
+const appearanceBar=el('div',undefined,'design-picker-heading');const appearanceCopy=el('div');const appearanceTitle=el('h2','选择你的工作空间');appearanceTitle.id='design-picker-title';appearanceCopy.append(appearanceTitle,el('p','七套工作空间，切换后立即预览。仅改变网页外观。'));
 appearanceBar.append(appearanceCopy,button('关闭',()=>appearanceDialog.close(),'secondary'));appearanceDialog.append(appearanceBar);
 const appearanceOptions=el('div',undefined,'design-options');appearanceOptions.setAttribute('role','radiogroup');appearanceOptions.setAttribute('aria-label','工作台外观主题');appearanceDialog.append(appearanceOptions);
 const appearanceNote=el('div',undefined,'design-picker-note');appearanceNote.append(el('span','设计参考 · VoltAgent / awesome-design-md'),button('完成',()=>appearanceDialog.close(),'primary'));appearanceDialog.append(appearanceNote);document.body.append(appearanceDialog);
@@ -34,7 +36,7 @@ bindQualityChoiceKeys(appearanceOptions,'[role=radio]');
 const typeControls=el('div',undefined,'design-type-controls');typeControls.setAttribute('role','group');typeControls.setAttribute('aria-label','工作台文字大小');typeControls.append(el('strong','文字大小'));
 function setWorkspaceType(size,persist=false){document.body.dataset.typeSize=['standard','comfortable','large'].includes(size)?size:'comfortable';for(const item of typeControls.querySelectorAll('button')){const active=item.dataset.size===document.body.dataset.typeSize;item.classList.toggle('active',active);item.setAttribute('aria-pressed',String(active));}if(persist)saveDesignPreference('safety-type-size',document.body.dataset.typeSize);}
 for(const [size,label] of [['standard','紧凑'],['comfortable','舒适'],['large','大字']]){const control=button(label,()=>setWorkspaceType(size,true),'secondary');control.dataset.size=size;typeControls.append(control);}appearanceNote.before(typeControls);setWorkspaceType(readDesignPreference('safety-type-size'));
-const profileCopy={notion:'活泼彩色 · 分组卡片 · 图文工作空间',claude:'典雅书稿 · 衬线正文 · 纵向阅读',linear:'科技深空 · 精密列表 · 高对比度',apple:'简约银白 · 文档目录 · 大幅留白',stripe:'商务靛蓝 · 深色侧栏 · 数据表格'};
+const profileCopy={notion:'活泼彩色 · 分组卡片 · 图文工作空间',claude:'典雅书稿 · 衬线正文 · 纵向阅读',linear:'科技深空 · 精密列表 · 高对比度',apple:'简约银白 · 文档目录 · 大幅留白',stripe:'商务靛蓝 · 深色侧栏 · 数据表格',fashion:'时尚莓红 · 编辑式排版 · 大色块',vivid:'活力撞色 · 珊瑚橙与薄荷 · 活泼卡片'};
 for(const choice of appearanceOptions.children)choice.querySelector('.design-choice-copy p').textContent=profileCopy[choice.dataset.designChoice];
 
 // Phosphor duotone assets are bundled locally; each function has its own scene.

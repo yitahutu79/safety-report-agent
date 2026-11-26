@@ -1,0 +1,115 @@
+{
+  "prefix": "mingcute",
+  "source": "https://raw.githubusercontent.com/iconify/icon-sets/master/json/mingcute.json",
+  "sha256": "38203039b754f0b6cb316096350705854ece3ad455effd5c1ea94ff569bf6ed1",
+  "info": {
+    "name": "MingCute Icon",
+    "total": 4526,
+    "author": {
+      "name": "MingCute Design",
+      "url": "https://github.com/Richard9394/MingCute"
+    },
+    "license": {
+      "title": "Apache 2.0",
+      "spdx": "Apache-2.0",
+      "url": "https://github.com/Richard9394/MingCute/blob/main/LICENSE"
+    },
+    "samples": [
+      "edit-3-line",
+      "alert-fill",
+      "riding-line",
+      "layout-9-line",
+      "currency-dollar-2-line",
+      "trello-board-fill"
+    ],
+    "height": 24,
+    "category": "UI 24px",
+    "tags": [
+      "Precise Shapes",
+      "Has Padding"
+    ],
+    "palette": false
+  },
+  "icons": {
+    "folders": {
+      "name": "mingcute:folder-2-fill",
+      "file": "web/ui-icons/mingcute-folders.svg",
+      "sha256": "564a3d28a6bf41e40c89e717c32cbc548837a968bd458f7b3c276bdcf003bd9d"
+    },
+    "identification-card": {
+      "name": "mingcute:idcard-fill",
+      "file": "web/ui-icons/mingcute-identification-card.svg",
+      "sha256": "e4044f41905f4a0fdd3f7fcb4c7fda4e0e1bce6312f7aae7e29b51737401787f"
+    },
+    "image": {
+      "name": "mingcute:pic-fill",
+      "file": "web/ui-icons/mingcute-image.svg",
+      "sha256": "83feaa17fe1dd3bbb21fdc7d6388a1e8a3a48a41285ad9ba379c5d5936843868"
+    },
+    "database": {
+      "name": "mingcute:database-search-fill",
+      "file": "web/ui-icons/mingcute-database.svg",
+      "sha256": "1dfee393e69b63c8bdfeb38bfa3ab9b2c12cb866689a8db08baf434aafa7ee9b"
+    },
+    "note-pencil": {
+      "name": "mingcute:edit-2-fill",
+      "file": "web/ui-icons/mingcute-note-pencil.svg",
+      "sha256": "e3040b1a25e18a0e5f65c13bc7a09e82ffb265f5c3eeb1b61309ed99f653eb52"
+    },
+    "shield-check": {
+      "name": "mingcute:safe-shield-fill",
+      "file": "web/ui-icons/mingcute-shield-check.svg",
+      "sha256": "d7af05fc85cc48b81a561a5c16ebf1598fb320db76292b3365a858b99ec56d03"
+    },
+    "calculator": {
+      "name": "mingcute:counter-2-fill",
+      "file": "web/ui-icons/mingcute-calculator.svg",
+      "sha256": "6eabefef21464604b46c84de8dd456a6a44fe0c1d5bd56adbbb4cf19d9c3b3eb"
+    },
+    "list-checks": {
+      "name": "mingcute:task-fill",
+      "file": "web/ui-icons/mingcute-list-checks.svg",
+      "sha256": "f3074060341f3a5240e15b78ef8186451b77328651ccbea3dff0e431997e43e8"
+    },
+    "chat-circle-dots": {
+      "name": "mingcute:chat-3-fill",
+      "file": "web/ui-icons/mingcute-chat-circle-dots.svg",
+      "sha256": "26ffeaefe4d154563615a59ed5fb9a7679859cc3d6decd40aa19ebe5dce3ee85"
+    },
+    "books": {
+      "name": "mingcute:book-6-fill",
+      "file": "web/ui-icons/mingcute-books.svg",
+      "sha256": "43223430c36728855ebd058e23d6c627edc19d3a35a25193e4d335348de6f637"
+    },
+    "target": {
+      "name": "mingcute:target-fill",
+      "file": "web/ui-icons/mingcute-target.svg",
+      "sha256": "9059f5e3adba2f419f64e69ac896c0087ce786264dc83cdbe1258811d1a90238"
+    },
+    "clock-counter-clockwise": {
+      "name": "mingcute:history-fill",
+      "file": "web/ui-icons/mingcute-clock-counter-clockwise.svg",
+      "sha256": "8edb9a8f5ff15cc3febfa6e0042671ef61029050c784a5abfb25f82af940d0c0"
+    },
+    "clipboard-text": {
+      "name": "mingcute:clipboard-fill",
+      "file": "web/ui-icons/mingcute-clipboard-text.svg",
+      "sha256": "97f6311095c5a4fec1b0262e0ba9791d229d195e16e4b81f2b8132db0c62fa3b"
+    },
+    "cloud-arrow-down": {
+      "name": "mingcute:download-fill",
+      "file": "web/ui-icons/mingcute-cloud-arrow-down.svg",
+      "sha256": "57d7daecf04b0ce095d92e9ac5d2ba55f0ab3420de0eb6e0539b6c453d2bb270"
+    },
+    "magnifying-glass": {
+      "name": "mingcute:search-2-fill",
+      "file": "web/ui-icons/mingcute-magnifying-glass.svg",
+      "sha256": "da44fdfb0d46d191572b12defc0e302e16721bc655182a36ebbc2f9019faa08e"
+    },
+    "chart-bar": {
+      "name": "mingcute:chart-bar-fill",
+      "file": "web/ui-icons/mingcute-chart-bar.svg",
+      "sha256": "61eed4cbdb16cb94b54a0e50c58553ecad579826d3d28df67ab000dd52102c04"
+    }
+  }
+}

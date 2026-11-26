@@ -1,0 +1,94 @@
+/* Layout and interaction variants. Source decisions: docs/组件复用与模板布局.md. */
+.experience-library-frame{min-width:0}.experience-categories{display:none}.experience-rail-toggle,.experience-dock{display:none!important}
+.experience-category-count.badge,.experience-command-trigger .kbd{--border:1px;--radius-field:5px;--radius-selector:6px;--size-field:.25rem;--size-selector:.25rem;--color-base-100:var(--design-surface);--color-base-200:var(--design-soft);--color-base-300:var(--design-line);--color-base-content:var(--design-body);--badge-color:var(--design-soft);--badge-fg:var(--design-body);--noise:0;--fx-noise:none}
+body.studio-ui[data-design-theme] .experience-command-trigger{min-height:34px;padding:6px 10px;background:var(--design-surface);color:var(--design-body);border:1px solid var(--design-line);font-size:12px;gap:8px}
+.experience-command-trigger .kbd{font:10px/1.4 system-ui,sans-serif;min-height:20px;height:auto;white-space:nowrap;padding:2px 5px}
+body.studio-ui[data-design-theme] .experience-command{width:min(600px,calc(100vw - 32px));padding:20px;border:1px solid var(--design-line);border-radius:14px;background:var(--design-surface);color:var(--design-body);box-shadow:0 18px 70px #11182738;max-height:85vh}
+.experience-command::backdrop{background:#0e182b66;backdrop-filter:blur(3px)}.experience-command-head{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:16px}.experience-command-head h2{font-size:19px;margin:0}.experience-command>input{width:100%;margin-bottom:12px}.experience-command-results{max-height:46vh;overflow:auto}.experience-command-group{color:var(--design-muted);font-size:12px;margin:16px 10px 6px}.experience-command>p{margin:14px 0 0;font-size:12px}
+body.studio-ui[data-design-theme] .experience-command-option{display:flex;align-items:center;width:100%;justify-content:flex-start;border:0;padding:12px;margin:2px 0;background:transparent;color:var(--design-body);font-size:14px;text-align:left}.experience-command-option img{width:21px;height:21px;opacity:.75}.experience-command-option small{margin-left:auto;color:var(--design-muted);font-size:11px}body.studio-ui[data-design-theme] .experience-command-option.active{background:var(--design-soft);outline:1px solid var(--design-line)}
+body.studio-ui[data-design-theme=linear] .experience-command-option img{filter:invert(1)}
+body.studio-ui[data-design-theme] .experience-category{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;padding:10px 12px;background:none;color:var(--design-body);border:0;white-space:normal;text-align:left;font-size:13px}
+.experience-category>span:first-child{min-width:0}.experience-category-count.badge{font-size:11px;min-width:24px;height:23px}
+body.studio-ui[data-design-theme] .experience-category.active{background:var(--design-soft);color:var(--design-ink);font-weight:650}.experience-categories h3{font-size:14px;padding:0 12px;margin:0 0 12px;color:var(--design-ink)}
+body.studio-ui[data-design-theme] .experience-reading-selected{outline:1px solid var(--design-primary);outline-offset:-1px}
+/* Reading templates: taxonomy, catalog and live reading pane are separate columns. */
+@media(min-width:1180px){
+ body.studio-ui:is([data-design-theme=claude],[data-design-theme=apple]) .experience-library-frame{display:grid;grid-template-columns:155px minmax(0,1fr);gap:24px;align-items:start}
+ body.studio-ui:is([data-design-theme=claude],[data-design-theme=apple]) .experience-categories{display:block;position:sticky;top:80px;padding:18px 0;background:var(--design-raised);border:1px solid var(--design-line);border-radius:var(--design-radius)}
+ body.studio-ui:is([data-design-theme=claude],[data-design-theme=apple]) .experience-library-frame:has(.studio-detail-dialog[open]){grid-template-columns:minmax(0,1fr) minmax(320px,390px)}
+ body.studio-ui:is([data-design-theme=claude],[data-design-theme=apple]) .experience-library-frame:has(.studio-detail-dialog[open]) .experience-categories{display:none}
+ body.studio-ui:is([data-design-theme=claude],[data-design-theme=apple]) .experience-library-frame .studio-detail-dialog{position:sticky;inset:auto;top:80px;margin:0;width:100%;max-height:calc(100vh - 96px);box-shadow:none;border:1px solid var(--design-line);border-radius:var(--design-radius);grid-column:2;grid-row:1;z-index:2}
+ body.studio-ui:is([data-design-theme=claude],[data-design-theme=apple]) .experience-library-frame:has(.studio-detail-dialog[open]) .studio-row:not(.studio-row-header){display:flex;flex-direction:column;align-items:stretch;gap:14px;padding:20px}
+ body.studio-ui:is([data-design-theme=claude],[data-design-theme=apple]) .experience-library-frame:has(.studio-detail-dialog[open]) .studio-row-status{flex-direction:row;align-items:center;flex-wrap:wrap}
+ body.studio-ui:is([data-design-theme=claude],[data-design-theme=apple]) .experience-library-frame:has(.studio-detail-dialog[open]) .studio-row-header{display:none!important}
+ body.studio-ui:is([data-design-theme=claude],[data-design-theme=apple]) .experience-library-frame:has(.studio-detail-dialog[open]) .studio-library-toolbar{flex-wrap:wrap}
+ body.studio-ui:is([data-design-theme=claude],[data-design-theme=apple]) .experience-library-frame:has(.studio-detail-dialog[open]) .studio-search{min-width:100%;max-width:none}
+ body.studio-ui:is([data-design-theme=claude],[data-design-theme=apple]) .studio-library{min-width:0}
+ /* An icon rail rather than a full text sidebar is the technology template's default. */
+ body.studio-ui[data-design-theme=linear]:not(.experience-wide-rail) .shell:not(.sidebar-collapsed){grid-template-columns:88px minmax(0,1fr)}
+ body.studio-ui[data-design-theme=linear]:not(.experience-wide-rail) #workbench-sidebar{width:88px;padding-left:12px;padding-right:12px}
+ body.studio-ui[data-design-theme=linear]:not(.experience-wide-rail) #workbench-sidebar .brand{justify-content:center;padding:0;margin-bottom:12px}
+ body.studio-ui[data-design-theme=linear]:not(.experience-wide-rail) #workbench-sidebar .brand>:not(.brand-icon){display:none}
+ body.studio-ui[data-design-theme=linear]:not(.experience-wide-rail) #workbench-sidebar :is(.task-nav-heading,.aside-label,.aside-footer){display:none}
+ body.studio-ui[data-design-theme=linear]:not(.experience-wide-rail) #workbench-sidebar .task-navigation{margin-top:8px}
+ body.studio-ui[data-design-theme=linear]:not(.experience-wide-rail) #workbench-sidebar .task-nav-group{margin-top:8px;padding-top:8px;border-top:1px solid var(--design-line)}
+ body.studio-ui[data-design-theme=linear]:not(.experience-wide-rail) #workbench-sidebar :is(.task-nav-link,.overview-nav){font-size:0;padding:10px;justify-content:center;min-height:40px;margin:3px 0}
+ body.studio-ui[data-design-theme=linear]:not(.experience-wide-rail) #workbench-sidebar :is(.task-nav-link,.overview-nav) img{width:21px;height:21px}
+ body.studio-ui[data-design-theme=linear] .experience-rail-toggle{display:flex!important;font-size:12px;width:100%;background:var(--design-soft);color:var(--design-body);border:1px solid var(--design-line);margin-bottom:8px}
+ body.studio-ui[data-design-theme=linear]:not(.experience-wide-rail) .experience-rail-toggle{font-size:0;justify-content:center;padding:8px}
+ body.studio-ui[data-design-theme=linear]:not(.experience-wide-rail) #workbench-sidebar :is(#new-project,#open-models){font-size:0;min-height:36px;padding:8px;justify-content:center}
+ .experience-rail-action-icon{display:none}
+ body.studio-ui[data-design-theme=linear]:not(.experience-wide-rail) #workbench-sidebar .experience-rail-action-icon{display:block;width:19px;height:19px;filter:invert(1)}
+ body.studio-ui[data-design-theme=linear]:not(.experience-wide-rail) #projects .project-list-row>button:first-child{padding:8px;font-size:10px;max-height:46px;overflow:hidden;white-space:nowrap}
+ body.studio-ui[data-design-theme=linear]:not(.experience-wide-rail) #projects .project-trash-button{display:none}
+ /* Business template: query controls become a vertical filter workstation. */
+ body.studio-ui[data-design-theme=stripe] .studio-library{display:grid;grid-template-columns:210px minmax(0,1fr);align-items:start;overflow:visible}
+ body.studio-ui[data-design-theme=stripe] .studio-library-toolbar{grid-column:1;grid-row:1 / span 2;display:flex;flex-direction:column;align-items:stretch;padding:20px 16px;min-height:260px;position:sticky;top:80px;border:0;border-right:1px solid var(--design-line);background:var(--design-raised)}
+ body.studio-ui[data-design-theme=stripe] .studio-library-toolbar :is(select,.studio-search){width:100%;min-width:0;max-width:100%}
+ body.studio-ui[data-design-theme=stripe] .studio-library-toolbar .design-layout-controls{margin:0;justify-content:center}
+ body.studio-ui[data-design-theme=stripe] .studio-list-count{grid-column:2;padding:16px 18px;margin:0}
+ body.studio-ui[data-design-theme=stripe] .studio-knowledge-list{grid-column:2;border-left:1px solid var(--design-line)}
+ body.studio-ui[data-design-theme=stripe] .studio-row{grid-template-columns:minmax(0,1fr) 125px;gap:12px}
+ body.studio-ui[data-design-theme=stripe] .studio-row-actions{grid-column:1/-1;justify-content:flex-end!important}
+ body.studio-ui[data-design-theme=stripe] .studio-row-header>span:last-child{display:none}
+ /* Silver report editor: the outline is an actual horizontal chapter strip. */
+ body.studio-ui[data-design-theme=apple]:not(.editorial-focus) .chapter-workspace{grid-template-columns:minmax(0,1fr) 245px;gap:22px}
+ body.studio-ui[data-design-theme=apple]:not(.editorial-focus) .chapter-navigation{grid-column:1/-1;position:static;max-height:none;padding:12px 16px;background:var(--design-raised);border:1px solid var(--design-line);border-radius:12px}
+ body.studio-ui[data-design-theme=apple]:not(.editorial-focus) #chapter-navigation-list{display:flex;gap:8px;overflow:auto;padding-top:10px;align-items:stretch}
+ body.studio-ui[data-design-theme=apple]:not(.editorial-focus) .chapter-navigation-item{min-width:170px;width:170px;flex:none;min-height:60px}
+ body.studio-ui[data-design-theme=apple]:not(.editorial-focus) .chapter-paper{grid-column:1}
+ body.studio-ui[data-design-theme=apple]:not(.editorial-focus) .chapter-assistant{grid-column:2;grid-row:2}
+}
+/* Magazine and bento templates use a different content topology, not a different tint. */
+@media(min-width:1050px){
+ body.studio-ui[data-design-theme=fashion][data-knowledge-layout=cards] .studio-knowledge-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px;background:transparent}
+ body.studio-ui[data-design-theme=fashion][data-knowledge-layout=cards] .studio-row:nth-child(2){grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) 180px;gap:20px;padding:32px;background:var(--design-surface);border:1px solid var(--design-line);border-radius:2px}
+ body.studio-ui[data-design-theme=fashion][data-knowledge-layout=cards] .studio-row:nth-child(2) .studio-row-title{font-size:24px;line-height:1.8}
+ body.studio-ui[data-design-theme=fashion][data-knowledge-layout=cards] .studio-row:nth-child(2) .studio-file-icon{height:130px;width:100px;border-radius:3px;background:#f2d8e4;flex:none}
+ body.studio-ui[data-design-theme=fashion][data-knowledge-layout=cards] .studio-row:nth-child(2) .studio-file-icon img{width:42px;height:42px}
+ body.studio-ui[data-design-theme=fashion][data-knowledge-layout=cards] .studio-row:nth-child(2) .studio-row-excerpt{-webkit-line-clamp:4;font-size:var(--ui-prose);font-family:'Safety Serif',serif}
+ body.studio-ui[data-design-theme=fashion][data-knowledge-layout=cards] .studio-row:nth-child(2) .studio-row-actions{grid-column:1/-1}
+ body.studio-ui[data-design-theme=vivid][data-knowledge-layout=cards] .studio-knowledge-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}
+ body.studio-ui[data-design-theme=vivid][data-knowledge-layout=cards] .studio-row:nth-child(2){grid-column:span 2}
+ body.studio-ui[data-design-theme=vivid][data-knowledge-layout=cards] .studio-row:nth-child(2) .studio-row-title{font-size:23px}
+ body.studio-ui[data-design-theme=vivid][data-knowledge-layout=cards] .studio-row:nth-child(2) .studio-row-excerpt{-webkit-line-clamp:5;font-size:var(--ui-prose)}
+ body.studio-ui[data-design-theme=notion][data-knowledge-layout=cards] .studio-row:nth-child(2){min-height:300px}
+}
+body.studio-ui[data-design-theme=vivid] .experience-dock{display:flex!important;position:fixed;z-index:15;left:calc(50% + 116px);bottom:16px;transform:translateX(-50%);gap:6px;padding:7px;background:#243e32;border:1px solid #496e58;border-radius:22px;box-shadow:0 8px 25px #1d382b30}
+body.studio-ui[data-design-theme=vivid] .experience-dock-item{display:flex;flex-direction:column;gap:4px;padding:9px 19px;background:transparent;color:#fff;border:0;font-size:11px;border-radius:15px;min-width:68px}
+.experience-dock-item img{width:23px;height:23px;filter:invert(1)}
+body.studio-ui[data-design-theme=vivid] .experience-dock-item:hover,body.studio-ui[data-design-theme=vivid] .experience-dock-item:focus-visible{background:#456c56;color:#fff}
+body.studio-ui[data-design-theme=vivid] main{padding-bottom:120px}
+body.studio-ui[data-design-theme] .studio-page-header:hover .scene-support{translate:0 -3px;transition:translate .18s ease-out}
+body.studio-ui[data-design-theme] .studio-row:hover{border-color:color-mix(in srgb,var(--design-primary),var(--design-line) 60%)}
+@media(max-width:1179px){.experience-rail-action-icon{display:none!important}.experience-library-frame .studio-detail-dialog{z-index:25}.experience-categories{display:none}}
+@media(max-width:760px){.experience-command-trigger .kbd{display:none}body.studio-ui[data-design-theme] .experience-command-trigger{font-size:0;width:34px;padding:6px}.experience-command-trigger img{width:18px;height:18px}body.studio-ui[data-design-theme=vivid] .experience-dock{left:50%;bottom:10px;max-width:calc(100vw - 24px)}body.studio-ui[data-design-theme=vivid] .experience-dock-item{min-width:60px;padding:7px 13px}.experience-command-head h2{font-size:17px}}
+@media(prefers-reduced-motion:reduce){body.studio-ui[data-design-theme] .studio-page-header:hover .scene-support{translate:none;transition:none}}
+@media(min-width:1180px){
+ body.studio-ui[data-design-theme=linear]:not(.experience-wide-rail) #workbench-sidebar .brand>.brand-icon-image{display:block;width:34px;height:40px}
+ body.studio-ui[data-design-theme=linear]:not(.experience-wide-rail) #workbench-sidebar .recycle-button{font-size:0;justify-content:center;padding:8px}
+ body.studio-ui[data-design-theme=linear]:not(.experience-wide-rail) #workbench-sidebar .recycle-button img{display:block;width:19px;height:19px;filter:invert(1)}
+}
+body.studio-ui[data-design-theme] :is(.experience-dock-item,.experience-category)::before{content:none!important}
+body.studio-ui[data-design-theme=vivid][data-current-view=draft] .experience-dock{display:none!important}
+body.studio-ui[data-design-theme=vivid] .experience-dock-item.active{background:#466e56;color:#fff}

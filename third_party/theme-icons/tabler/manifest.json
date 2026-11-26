@@ -1,0 +1,117 @@
+{
+  "prefix": "tabler",
+  "source": "https://raw.githubusercontent.com/iconify/icon-sets/master/json/tabler.json",
+  "sha256": "d675ae9a7f17f58d9f0e7077991ebcf3f401c280d154fe558e74bf15aac41bf1",
+  "info": {
+    "name": "Tabler Icons",
+    "total": 6563,
+    "version": "3.53.0",
+    "author": {
+      "name": "Paweł Kuna",
+      "url": "https://github.com/tabler/tabler-icons"
+    },
+    "license": {
+      "title": "MIT",
+      "spdx": "MIT",
+      "url": "https://github.com/tabler/tabler-icons/blob/master/LICENSE"
+    },
+    "samples": [
+      "alien",
+      "device-desktop",
+      "photo",
+      "chevron-right",
+      "check",
+      "square-root"
+    ],
+    "height": 24,
+    "category": "UI 24px",
+    "tags": [
+      "Precise Shapes",
+      "Has Padding",
+      "Uses Stroke"
+    ],
+    "palette": false
+  },
+  "icons": {
+    "folders": {
+      "name": "tabler:folders",
+      "file": "web/ui-icons/tabler-folders.svg",
+      "sha256": "d1c225f20a986bd5caedcb501b466f5b46a7b4a9c98fcf1268d6d6cc13f91ec2"
+    },
+    "identification-card": {
+      "name": "tabler:id",
+      "file": "web/ui-icons/tabler-identification-card.svg",
+      "sha256": "4ee184e11f48c2e7a5e7251e028d4921e585704ead43578a196f8df9ae2bf889"
+    },
+    "image": {
+      "name": "tabler:photo",
+      "file": "web/ui-icons/tabler-image.svg",
+      "sha256": "86f55c2467172cc851c282a9ac9bde37d0f07db1647db2360f3f5d7b1b7a1a95"
+    },
+    "database": {
+      "name": "tabler:database",
+      "file": "web/ui-icons/tabler-database.svg",
+      "sha256": "dfbfb6b332f4e6fdecf2a98759105991146a89a42413bb489813653e2e06084f"
+    },
+    "note-pencil": {
+      "name": "tabler:file-pencil",
+      "file": "web/ui-icons/tabler-note-pencil.svg",
+      "sha256": "df52e006e8abfea73172a1d0ca694a8c757510e8c745d06f9d47a837cda39a8a"
+    },
+    "shield-check": {
+      "name": "tabler:shield-check",
+      "file": "web/ui-icons/tabler-shield-check.svg",
+      "sha256": "69f81065b7cdd75d7e498ecff888919390966b57e4149688b9b6b5e90ef0a6c7"
+    },
+    "calculator": {
+      "name": "tabler:calculator",
+      "file": "web/ui-icons/tabler-calculator.svg",
+      "sha256": "69b656953035c1a8329c9ddfaca29e5ee8456af6be54202c90ee805a480cd702"
+    },
+    "list-checks": {
+      "name": "tabler:list-check",
+      "file": "web/ui-icons/tabler-list-checks.svg",
+      "sha256": "372a77814ac432c3740d6a4970ab4729e26e581e1c92aa9ce9f18f120103728d"
+    },
+    "chat-circle-dots": {
+      "name": "tabler:messages",
+      "file": "web/ui-icons/tabler-chat-circle-dots.svg",
+      "sha256": "367546d2e02fd3a5e07fe65e2523e5cd865d1c6b279fe05d647272d27c966cd4"
+    },
+    "books": {
+      "name": "tabler:books",
+      "file": "web/ui-icons/tabler-books.svg",
+      "sha256": "65ebfb7154a82b3f28482cf480dd0db293a5c0c4e851f02db8222388bac846c9"
+    },
+    "target": {
+      "name": "tabler:target-arrow",
+      "file": "web/ui-icons/tabler-target.svg",
+      "sha256": "c5b42f580036dadc3420c29dc98d98d825498dcb7d492aa59ddc3987f1ab7879"
+    },
+    "clock-counter-clockwise": {
+      "name": "tabler:history",
+      "file": "web/ui-icons/tabler-clock-counter-clockwise.svg",
+      "sha256": "9793735890d850ee3806ddb7282f0b35f1e703b8d13ef95434ff6dea177fa15f"
+    },
+    "clipboard-text": {
+      "name": "tabler:clipboard-text",
+      "file": "web/ui-icons/tabler-clipboard-text.svg",
+      "sha256": "f5878f54500b7dfc3b3afd1cb9993c929049c31bbbf3c1a537e2e96965c51d25"
+    },
+    "cloud-arrow-down": {
+      "name": "tabler:cloud-download",
+      "file": "web/ui-icons/tabler-cloud-arrow-down.svg",
+      "sha256": "f544d6612e53c8c6cda71f111b5a0bf121df9da724035a3ea799727f28a78e76"
+    },
+    "magnifying-glass": {
+      "name": "tabler:search",
+      "file": "web/ui-icons/tabler-magnifying-glass.svg",
+      "sha256": "e297a532bfbf063f8766862d6bb60799e52ed01af5b81c98735fc92bc30917bf"
+    },
+    "chart-bar": {
+      "name": "tabler:chart-bar",
+      "file": "web/ui-icons/tabler-chart-bar.svg",
+      "sha256": "3c4ce7b111d32b8a853f065666fc05055eabe107b437bdf2aaa08a7d13520fa9"
+    }
+  }
+}

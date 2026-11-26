@@ -725,6 +725,10 @@ class Handler(BaseHTTPRequestHandler):
             static = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8'), '/experience.css': ('experience.css', 'text/css; charset=utf-8'), '/product-design.css': ('product-design.css', 'text/css; charset=utf-8'), '/product-design.js': ('product-design.js', 'text/javascript; charset=utf-8'), '/report-preview.js': ('report-preview.js','text/javascript; charset=utf-8'), '/workspace-upgrades.js': ('workspace-upgrades.js','text/javascript; charset=utf-8'), '/brand-mark.svg': ('brand-mark.svg', 'image/svg+xml'), '/manifest.webmanifest': ('manifest.webmanifest', 'application/manifest+json')}
             static['/design-themes.js'] = ('design-themes.js', 'text/javascript; charset=utf-8')
             static['/design-themes.css'] = ('design-themes.css', 'text/css; charset=utf-8')
+            static['/component-experience.js'] = ('component-experience.js', 'text/javascript; charset=utf-8')
+            static['/component-experience.css'] = ('component-experience.css', 'text/css; charset=utf-8')
+            static['/vendor/daisyui-kbd.css'] = ('vendor/daisyui-kbd.css', 'text/css; charset=utf-8')
+            static['/vendor/daisyui-badge.css'] = ('vendor/daisyui-badge.css', 'text/css; charset=utf-8')
             static['/studio-ui.js'] = ('studio-ui.js', 'text/javascript; charset=utf-8')
             static['/studio-ui.css'] = ('studio-ui.css', 'text/css; charset=utf-8')
             static['/fonts/LXGWWenKai-Regular.ttf'] = ('fonts/LXGWWenKai-Regular.ttf', 'font/ttf')
