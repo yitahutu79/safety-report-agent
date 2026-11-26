@@ -184,7 +184,9 @@ function showParagraphSources(item){
  if(!dialog.open)dialog.showModal();
 }
 function drawReadingView(){
- const preview=$('#reading-content');if(!preview||!report)return;preview.replaceChildren();
+ const preview=$('#reading-content');if(!preview||!report)return;
+ if(typeof reportPreviewOrder!=='function'){if(!preview.childElementCount)preview.append(el('p','正在恢复报告预览组件，正文内容保留。','muted'));ensurePreviewRuntime().then(()=>{if(report)drawReadingView();}).catch(error=>notify(error.message));return;}
+ preview.replaceChildren();
  const section=report.sections[currentChapter],rows=[...$('#paragraph-editor').querySelectorAll('.paragraph-block')],tables=[...$('#table-editor').querySelectorAll('.editor-table')];
  const live={...section,paragraphs:rows.map((row,i)=>({...section.paragraphs[Number(row.dataset.originalIndex??i)],heading:row.querySelector('select').value,text:row.querySelector('textarea').value}))};
  const scope=$('#subsection-edit-toolbar select')?.value||'';

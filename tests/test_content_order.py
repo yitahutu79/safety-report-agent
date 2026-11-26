@@ -83,3 +83,16 @@ def test_remove_legacy_unassigned_excerpts_preserves_subsections_and_sources():
     assert [{k:v for k,v in t.items() if k!='human_edited'} for t in new['sections'][0]['tables']]==s['tables']
     assert not new['sections'][0]['tables'][0]['human_edited']
     assert new['evidence']==old['evidence'] and len(old['sections'][0]['paragraphs'])==4
+
+
+def test_preview_helpers_are_available_to_classic_browser_scripts():
+    node=shutil.which('node')
+    if not node:pytest.skip('Node required for classic script global bindings')
+    script="""const fs=require('node:fs'),vm=require('node:vm');
+const scope=vm.createContext({});
+vm.runInContext(fs.readFileSync(process.argv[1],'utf8'),scope);
+const section=JSON.parse(process.argv[2]);
+if(typeof scope.reportPreviewOrder!=='function'||typeof scope.documentImagePreviewPath!=='function')process.exit(1);
+console.log(JSON.stringify(scope.reportPreviewOrder(section,'2.1 工艺')));"""
+    result=json.loads(subprocess.check_output([node,'-e',script,str(ROOT/'web/report-preview.js'),json.dumps(section())],text=True))
+    assert result==order_content(section(),'2.1 工艺')

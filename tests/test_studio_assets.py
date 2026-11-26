@@ -1,5 +1,6 @@
 """The desktop/offline UI must serve its bundled design assets through the app server."""
 import threading
+from html.parser import HTMLParser
 from http.server import ThreadingHTTPServer
 from urllib.request import urlopen
 from xml.etree import ElementTree
@@ -13,7 +14,7 @@ def test_studio_assets_are_served_locally(tmp_path, monkeypatch):
     thread.start()
     base = f'http://127.0.0.1:{http.server_port}'
     try:
-        for route, content_type in [('/component-experience.js', 'text/javascript'), ('/component-experience.css', 'text/css'), ('/vendor/daisyui-kbd.css', 'text/css'), ('/vendor/daisyui-badge.css', 'text/css'), ('/studio-ui.js', 'text/javascript'), ('/studio-ui.css', 'text/css'), ('/design-themes.js', 'text/javascript'), ('/design-themes.css', 'text/css')]:
+        for route, content_type in [('/report-preview.js', 'text/javascript'), ('/component-experience.js', 'text/javascript'), ('/component-experience.css', 'text/css'), ('/vendor/daisyui-kbd.css', 'text/css'), ('/vendor/daisyui-badge.css', 'text/css'), ('/studio-ui.js', 'text/javascript'), ('/studio-ui.css', 'text/css'), ('/design-themes.js', 'text/javascript'), ('/design-themes.css', 'text/css')]:
             with urlopen(base + route, timeout=5) as response:
                 assert response.status == 200
                 assert response.headers.get_content_type() == content_type
@@ -22,6 +23,21 @@ def test_studio_assets_are_served_locally(tmp_path, monkeypatch):
             with urlopen(base + '/fonts/' + name, timeout=5) as response:
                 assert response.headers.get_content_type() == mime
                 assert len(response.read()) > 100_000
+        # Dependencies must execute before the app and editorial consumers can render.
+        class Scripts(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.sources = []
+            def handle_starttag(self, tag, attrs):
+                values = dict(attrs)
+                if tag == 'script' and values.get('src'):
+                    assert 'defer' in values
+                    self.sources.append(values['src'])
+        scripts = Scripts()
+        with urlopen(base + '/', timeout=5) as response:
+            scripts.feed(response.read().decode())
+        assert scripts.sources.index('/report-preview.js') < scripts.sources.index('/app.js')
+        assert scripts.sources.index('/report-preview.js') < scripts.sources.index('/product-design.js')
         icons = list((server.ROOT / 'web' / 'ui-icons').glob('*.svg'))
         assert icons
         for icon in icons:

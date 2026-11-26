@@ -529,3 +529,11 @@ body.studio-ui[data-design-theme] .source-table-preview :is(td,th){border-color:
 body.studio-ui[data-design-theme] .chapter-navigation .workspace-column-title,body.studio-ui[data-design-theme] .chapter-assistant :is(.evidence-panel,.evidence-panel summary,ol,li){color:var(--design-body)}
 body.studio-ui[data-design-theme=vivid] .studio-subtab.active .studio-icon{filter:brightness(0) invert(1);opacity:1}
 body.studio-ui[data-design-theme] :is(.fact small,.fact .field-source){color:var(--design-muted)}
+/* Original appendix controls are a paired surface, including collapsed labels. */
+body.studio-ui[data-design-theme] .original-appendix-control{background:var(--design-raised);color:var(--design-body);border:1px solid var(--design-line)}
+body.studio-ui[data-design-theme] .original-appendix-control :is(summary,label,strong){color:var(--design-body)}
+body.studio-ui[data-design-theme] .original-appendix-control small{color:var(--design-muted)}
+body.studio-ui[data-design-theme] :is(.file-metadata summary,.file-row small){color:var(--design-muted)}
+body.studio-ui[data-design-theme] .original-appendix-control label{display:grid;grid-template-columns:80px minmax(0,1fr);align-items:center;gap:12px}
+body.studio-ui[data-design-theme] .original-appendix-control label select{min-width:0;width:100%}
+@media(max-width:760px){body.studio-ui[data-design-theme] .original-appendix-control label{grid-template-columns:1fr;gap:8px}}
