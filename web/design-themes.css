@@ -537,3 +537,7 @@ body.studio-ui[data-design-theme] :is(.file-metadata summary,.file-row small){co
 body.studio-ui[data-design-theme] .original-appendix-control label{display:grid;grid-template-columns:80px minmax(0,1fr);align-items:center;gap:12px}
 body.studio-ui[data-design-theme] .original-appendix-control label select{min-width:0;width:100%}
 @media(max-width:760px){body.studio-ui[data-design-theme] .original-appendix-control label{grid-template-columns:1fr;gap:8px}}
+/* Confirmation strips own both their painted surface and readable foreground. */
+body.studio-ui[data-design-theme] .report-source-confirmation{background:var(--design-raised);color:var(--design-body);border:1px solid var(--design-line)}
+body.studio-ui[data-design-theme] .report-source-confirmation input{accent-color:var(--design-primary)}
+body.studio-ui[data-design-theme] .working-copy-status{background:var(--design-raised);color:var(--design-body);border:1px solid var(--design-line)}
