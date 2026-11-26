@@ -40,6 +40,13 @@ def load_report(target, ident=None):
     return json.loads(path.read_text(encoding='utf-8')) if path.exists() else None
 
 
+def referenced_sources(report):
+    """Expose only evidence actually cited in this report snapshot, never a newer source substitute."""
+    ids={eid for section in report.get('sections',[]) for key in ('paragraphs','tables','figures') for item in section.get(key,[]) for eid in item.get('evidence_ids',[])}
+    fields=('id','source','locator','text','sha256','source_file_id','corpus','validity_status','applicability','version')
+    return [{k:e[k] for k in fields if k in e} for e in report.get('evidence',[]) if e.get('id') in ids]
+
+
 def audit(report):
     return {'unconfirmed_fields': report.get('unconfirmed_fields', []),
         'chapters': [{'title': s['title'], 'missing': s.get('missing', []), 'review': s.get('review', [])} for s in report['sections']],

@@ -59,3 +59,13 @@ def test_http_question_uses_only_selected_project_and_fake_model(tmp_path, monke
         assert state['qa_result']['paragraphs'][0]['evidence_ids'] == ['private-a']
     finally:
         http.shutdown();http.server_close();thread.join(timeout=5)
+
+
+def test_unknown_validity_can_be_explained_with_explicit_warning():
+    source={'id':'a','source':'标准第一条','locator':'第一条','text':'第一条说明制定目的。','corpus':'approved_knowledge','validity_status':'unknown'}
+    def model(system,payload,config,**kwargs):
+        assert '不表示条文不存在' in system
+        assert '第一条说明制定目的' in payload['evidence'][0]['text']
+        return {'paragraphs':[{'text':'第一条说明制定目的。','evidence_ids':['a']}],'missing':[]}
+    result=knowledge_qa.answer_question('第一条说明什么？',[source],{},complete=model)
+    assert result['paragraphs'] and '未核验' in result['validity_warnings'][0]

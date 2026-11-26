@@ -6,3 +6,7 @@ langgraph>=1.0,<2
 
 langchain-text-splitters>=1.0,<2
 rapidocr>=3.10,<4
+
+# Official public-source discovery and webpage extraction (also used by GPT Researcher).
+ddgs>=9.16.1,<10
+trafilatura>=2.4,<3

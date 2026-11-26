@@ -150,7 +150,7 @@ class KnowledgeBase:
             self._invalidate_index()
             return record
 
-    def set_status(self, ident, status, reviewer=''):
+    def set_status(self, ident, status, reviewer='', confirm_use=False):
         if status not in STATUSES:
             raise ValueError('知识状态无效')
         reviewer = str(reviewer).strip()[:120]
@@ -163,27 +163,38 @@ class KnowledgeBase:
                 raise ValueError('没有找到知识条目')
             if status == 'approved' and (not record.get('source') or not record.get('content')):
                 raise ValueError('缺少来源或知识内容，不能审核通过')
+            if status=='approved' and confirm_use:
+                candidate={**record,'status':'approved'}
+                if candidate.get('category')=='regulation' and candidate.get('validity_status')=='unknown':candidate['validity_status']='current'
+                eligible,reason=self.retrieval_eligibility(candidate)
+                if not eligible:raise ValueError('不能审核启用：'+reason)
+                record['validity_status']=candidate.get('validity_status','not_applicable')
             record.update(status=status, reviewed_by=reviewer if status == 'approved' else '', updated_at=_now())
             record['audit'].append({'action': 'status_changed', 'at': record['updated_at'],
                                     'revision': record['revision'], 'status': status,
-                                    'reviewed_by': record['reviewed_by']})
+                                    'reviewed_by': record['reviewed_by'],'confirmed_use':bool(confirm_use),'validity_status':record.get('validity_status','unknown')})
             self._write(data)
             self._invalidate_index()
             return record
 
-    def _approved_chunks(self):
+    @staticmethod
+    def retrieval_eligibility(record, purpose="report"):
+        if record.get('status')!='approved':return False,'尚未审核通过或已停用'
+        if purpose=='reference' and record.get('category')=='regulation' and record.get('validity_status')=='unknown':
+            return True,'仅供已录入条文阅读；有效性未核验，不作为现行合规依据'
+        if record.get('category')=='regulation' and record.get('validity_status')!='current':
+            state={'unknown':'有效状态未知','superseded':'已被替代','repealed':'已废止','not_applicable':'有效状态不适用'}.get(record.get('validity_status'),'未确认有效状态')
+            return False,'法规'+state+'，未纳入检索；请核对适用版本后维护有效状态'
+        today=date.today().isoformat()
+        if record.get('effective_from') and record['effective_from']>today:return False,'尚未到生效日期'
+        if record.get('effective_to') and record['effective_to']<today:return False,'已超过失效日期'
+        return True,'已纳入检索；仍需结合问题核对适用性'
+
+    def _approved_chunks(self, purpose="report"):
         today = date.today()
         chunks = []
         for record in self._read()['records']:
-            if record.get('status') != 'approved':
-                continue
-            # Prevent outdated or unverified regulatory text from entering generation RAG.
-            if record.get('category') == 'regulation' and record.get('validity_status') != 'current':
-                continue
-            if record.get('effective_from') and date.fromisoformat(record['effective_from']) > today:
-                continue
-            if record.get('effective_to') and date.fromisoformat(record['effective_to']) < today:
-                continue
+            if not self.retrieval_eligibility(record,purpose)[0]:continue
             text = '\n'.join(filter(None, [record['title'], CATEGORIES[record['category']],
                 '适用范围：' + (record.get('applicability') or '未填写'),
                 '版本：' + (record.get('version') or '未填写'), record['content']]))
@@ -211,12 +222,12 @@ class KnowledgeBase:
         with self.lock:
             self._invalidate_index()
 
-    def search(self, query, limit=5):
+    def search(self, query, limit=5, purpose="report"):
         query = str(query).strip()
         if not query:
             return []
         with self.lock:
-            chunks = self._approved_chunks()
+            chunks = self._approved_chunks(purpose)
             if not chunks:
                 self.index_mode = 'empty'
                 return []

@@ -25,3 +25,7 @@
 已在隔离的 `.venv-researcher` 安装 PyPI `gpt-researcher==0.17.0`，实际调用原版 `actions.report_generation.generate_report` 和默认 PromptFamily，未修改其正文生成逻辑。工作台仍使用原 `.venv`。对照使用相同 DeepSeek Pro 和固定真实证据，不运行上游联网研究、解析、MCP 或完整 DetailedReport。原始输入、输出及指标在 `outputs/researcher同输入对照-2026-11-19/`；目录日期保留为实验启动日期。
 
 对照显示结构表达值得参考，但默认提示中的延长篇幅、生成参考链接等行为需要适配：原始概况输出出现 example.com 虚构引用。未将该输出直接导入项目报告，也未宣称整套上游已接入生产。
+
+## 2026-11-26 公共资料联网发现
+
+`safety_report/public_research.py` 参考上游 `retrievers/duckduckgo/duckduckgo.py` 的检索结果归一化方式，直接依赖同一开源搜索包 DDGS（开发验证9.16.1），不直接加载上游完整研究Agent。网页正文直接使用 trafilatura（开发验证2.4.0）。公共主题推荐、更新候选、政府来源限定、下载缓存、来源指纹、现有知识库待审核导入和操作界面为业务集成代码。本轮没有启用上游全套爬虫、深度研究或自动法规适用性认定。

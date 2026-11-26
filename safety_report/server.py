@@ -22,7 +22,7 @@ from urllib.parse import urlsplit, parse_qs, quote
 from .pipeline import analyze, generate, merge_fields, extract_model_fields, validate_ready, plan_missing_materials
 from .documents import retrieve, parse_file
 from .rag_workbench import search_project, retrieval_metrics
-from . import provider, settings, assets, versions, knowledge_qa
+from . import provider, settings, assets, versions, knowledge_qa, public_research
 from .node_checkpoint import NodeCheckpoint
 from .knowledge import CATEGORIES, KnowledgeBase
 from .measures import MeasuresLedger
@@ -563,12 +563,14 @@ def knowledge_qa_job(target, question, scope, model, cancel_event):
             evidence, mode, warning = search_project(chunks, target / 'knowledge' / 'qdrant', question, 8)
         else:
             store = knowledge_base()
-            evidence = store.search(question, 8)
+            evidence = store.search(question, 8, purpose="reference")
             mode, warning = store.index_mode, ''
         if cancel_event.is_set():
             raise provider.GenerationCancelled()
         state_update(target, message='正在根据检索资料组织回答')
         result = knowledge_qa.answer_question(question, evidence, model, cancel_event=cancel_event)
+        if scope!='project':
+            result['retrieval_exclusions']=[{'title':record['title'],'reason':store.retrieval_eligibility(record,'reference')[1]} for record in store.list(status='approved') if not store.retrieval_eligibility(record,'reference')[0]][:30]
         with project_lock(target.name):
             if cancel_event.is_set():
                 raise provider.GenerationCancelled()
@@ -721,6 +723,15 @@ class Handler(BaseHTTPRequestHandler):
             parsed = urlsplit(self.path)
             path, query = parsed.path, parse_qs(parsed.query)
             static = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8'), '/experience.css': ('experience.css', 'text/css; charset=utf-8'), '/product-design.css': ('product-design.css', 'text/css; charset=utf-8'), '/product-design.js': ('product-design.js', 'text/javascript; charset=utf-8'), '/report-preview.js': ('report-preview.js','text/javascript; charset=utf-8'), '/workspace-upgrades.js': ('workspace-upgrades.js','text/javascript; charset=utf-8'), '/brand-mark.svg': ('brand-mark.svg', 'image/svg+xml'), '/manifest.webmanifest': ('manifest.webmanifest', 'application/manifest+json')}
+            static['/design-themes.js'] = ('design-themes.js', 'text/javascript; charset=utf-8')
+            static['/design-themes.css'] = ('design-themes.css', 'text/css; charset=utf-8')
+            static['/studio-ui.js'] = ('studio-ui.js', 'text/javascript; charset=utf-8')
+            static['/studio-ui.css'] = ('studio-ui.css', 'text/css; charset=utf-8')
+            icon_match = re.fullmatch(r'/ui-icons/([a-z0-9-]+\.svg)', path)
+            if icon_match:
+                icon_path = ROOT / 'web' / 'ui-icons' / icon_match[1]
+                if not icon_path.is_file():return self.json({'error':'图标不存在'},404)
+                return self.send_bytes(200, icon_path.read_bytes(), 'image/svg+xml')
             if path in static:
                 name, mime = static[path]
                 return self.send_bytes(200, (ROOT / 'web' / name).read_bytes(), mime)
@@ -756,11 +767,47 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/report-types':
                 return self.json({'types': [{'id': ident, 'name': info['name'], 'confirmed_structure': info['confirmed_structure']}
                                              for ident, info in REPORT_TYPES.items()]})
+            if path == '/api/knowledge/research':
+                return self.json(public_research.latest(DATA))
+            if path == '/api/knowledge/recommendations':
+                context = ''
+                region_context = ''
+                if query.get('project_id'):
+                    target = directory(query['project_id'][0])
+                    state = load(target / 'state.json', {})
+                    # Classification runs locally. Only generic topics selected by the user go to search.
+                    context = json.dumps(state.get('fields', []), ensure_ascii=False)
+                    region_context = ' '.join(str(f.get('value','')) for f in state.get('fields', []) if f.get('key') in {'address','location'} and f.get('confirmed'))
+                    context += REPORT_TYPES.get(state.get('report_type', DEFAULT_TYPE), {}).get('name', '')
+                    analysis = load(target / 'analysis.json', {})
+                    context += ' '.join(c.get('text', '')[:800] for c in analysis.get('chunks', [])[:400])
+                records = knowledge_base().list(category='regulation')
+                topics = public_research.recommendations(context, region_context=region_context)
+                library = []
+                for record in records:
+                    title = record['title'].split(' · ')[0]
+                    title = re.sub(r'\.(txt|pdf|docx|md|csv)$', '', title, flags=re.I)
+                    title = re.sub(r'^试用摘选_', '', title)
+                    title = re.sub(r'_前[一二三四五六七八九十0-9]+条$', '', title)
+                    quoted = re.search(r'《([^》]+)》', title)
+                    term = quoted[1] if quoted else re.sub(r'第[一二三四五六七八九十百0-9]+条.*$', '', title).strip()
+                    term = term[:140]
+                    if term and not any(r['query'] == term+' 修订 替代 废止' for r in library):
+                        library.append({'title': term, 'query': term+' 修订 替代 废止',
+                            'reason': '库内版本：'+(record.get('version') or '未注明')+'；查找官方更新线索',
+                            'source_url': record.get('source_url', '')})
+                return self.json({'topics': topics, 'library': library,
+                    'notice': '推荐清单不等于全部适用依据；按实际行业、地区、工艺及项目阶段核对。地方规定按已确认项目地址推荐；地址未确认时可在补充检索词填写地区。'})
+            research_file = re.fullmatch(r'/api/knowledge/research/([a-f0-9]{32})/file', path)
+            if research_file:
+                info = public_research.download(DATA, research_file[1])
+                return self.send_bytes(200, (public_research.root(DATA) / info['file']).read_bytes(), info['mime'],
+                    extra={'Content-Disposition': "attachment; filename*=UTF-8''"+quote(info['name'])})
             if path == '/api/knowledge':
                 status = query.get('status', [''])[0]
                 category = query.get('category', [''])[0]
                 return self.json({'categories': CATEGORIES,
-                                  'records': knowledge_base().list(status=status, category=category)})
+                                  'records': [{**record,'retrieval_eligible':knowledge_base().retrieval_eligibility(record)[0],'retrieval_reason':knowledge_base().retrieval_eligibility(record)[1]} for record in knowledge_base().list(status=status, category=category)]})
             if path == '/api/knowledge/search':
                 store = knowledge_base()
                 results = store.search(query.get('q', [''])[0], int(query.get('limit', ['10'])[0]))
@@ -802,6 +849,7 @@ class Handler(BaseHTTPRequestHandler):
                     chapter_workflow=load(target / 'chapter-workflow.json',{})
                     if not query.get('version'):report=ordered_report(report,chapter_workflow)
                     public = {k: v for k, v in report.items() if k != 'evidence'}
+                    public['evidence_sources']=versions.referenced_sources(report)
                     if not query.get('version'):
                         from .report_appendices import build as build_appendices
                         public['appendix_manifest']=build_appendices(target,report,load(target/'state.json')['files'])
@@ -915,6 +963,17 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json({'ok': True, 'id': ident, **settings.public(DATA)})
                 config = settings.merge_input(DATA, data, require_model=path.endswith('/test'))
                 return self.json(provider.test_model(config) if path.endswith('/test') else {'models': provider.list_models(config)})
+            if path == '/api/knowledge/research':
+                payload = self.input_json()
+                queries = payload.get('queries')
+                if not isinstance(queries, list) or any(not isinstance(q, str) for q in queries):
+                    raise ValueError('请选择公共检索主题')
+                state = public_research.begin(DATA, queries, references=[{k: r.get(k, '') for k in ('title','version','source_url')} for r in knowledge_base().list(category='regulation')])
+                POOL.submit(public_research.run, DATA, state)
+                return self.json(state, 202)
+            research_import = re.fullmatch(r'/api/knowledge/research/([a-f0-9]{32})/import', path)
+            if research_import:
+                return self.json(public_research.import_candidate(DATA, research_import[1], knowledge_base()), 201)
             if path == '/api/knowledge/import':
                 import tempfile
                 params = parse_qs(parsed.query)
@@ -948,7 +1007,7 @@ class Handler(BaseHTTPRequestHandler):
                 data = self.input_json()
                 store = knowledge_base()
                 record = (store.update(ident, data) if operation == 'update'
-                          else store.set_status(ident, data.get('status', ''), data.get('reviewed_by', '')))
+                          else store.set_status(ident, data.get('status', ''), data.get('reviewed_by', ''), confirm_use=data.get('confirm_use') is True))
                 return self.json({'record': record})
             if path == '/api/projects':
                 data = self.input_json()

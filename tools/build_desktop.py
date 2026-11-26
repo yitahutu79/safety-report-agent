@@ -48,7 +48,7 @@ def main():
                '--workpath', str(ROOT / 'build' / 'pyinstaller')]
     for source, dest in [('web','web'),('reference','reference'),('skills','skills'),('branding','branding'),('third_party','third_party'),('docs/TESTING.md','docs'),('docs/全流程测试记录-2026-11-17.md','docs')]:
         command += ['--add-data', f'{ROOT / source}{os.pathsep}{dest}']
-    packages = ['webview','qdrant_client','fastembed','onnxruntime','pypdfium2','PIL','rapidocr']
+    packages = ['webview','qdrant_client','fastembed','onnxruntime','pypdfium2','PIL','rapidocr','ddgs','primp','trafilatura','courlan','htmldate','dateparser','lxml']
     if sys.platform == 'linux':
         packages.append('PySide6')
     for package in packages:

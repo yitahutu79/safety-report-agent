@@ -46,7 +46,7 @@ setMaterialFocus('overview');
 const focusByLabel={'资料导入':'upload','基本信息':'facts','图件与位置':'figure','专业分析':'professional','安全措施':'measures','分析计算':'calculations'};
 for(const link of taskButtons){const label=link.textContent.replace('·','').trim();const focus=focusByLabel[label];if(focus)link.addEventListener('click',()=>{setMaterialFocus(focus);requestAnimationFrame(()=>{const card=(materialCards[focus]||[]).find(x=>x&&!x.classList.contains('hidden'));if(card)card.scrollIntoView({behavior:'smooth',block:'start'});});});}
 const knowledgePanel=$('#view-knowledge');
-const knowledgeGroups={qa:[$('#knowledge-qa')],maintain:[publicImport,$('#kb-category').closest('section'),$('#kb-records').closest('section'),$('#kb-query').closest('details')],evaluation:[$('#rag-advanced')]};
+const knowledgeGroups={qa:[$('#knowledge-qa')],maintain:[publicImport,publicResearchPanel,$('#kb-category').closest('section'),$('#kb-records').closest('section'),$('#kb-query').closest('details')],evaluation:[$('#rag-advanced')]};
 function setKnowledgeFocus(focus){const visible=knowledgeGroups[focus]||knowledgeGroups.qa;for(const group of Object.values(knowledgeGroups))for(const node of group)if(node)node.classList.toggle('material-focused-hidden',!visible.includes(node));knowledgePanel.dataset.focus=focus;}
 setKnowledgeFocus('qa');
 const knowledgeFocusByLabel={'知识问答':'qa','知识维护':'maintain','检索评测':'evaluation'};
@@ -170,6 +170,19 @@ $('#qa-ask').textContent='生成有依据的回答';
 const qaRenderBeforeEditorial=showQa;
 showQa=function(project){qaRenderBeforeEditorial(project);const box=$('#qa-result');if(project.qa_result&&!project.busy){const actions=el('div',undefined,'answer-actions');actions.append(button('复制回答',async()=>{const content=[project.qa_result.question,...(project.qa_result.paragraphs||[]).map(p=>p.text),...(project.qa_result.missing||[]).map(t=>'待核实：'+t)].join('\n\n');await navigator.clipboard.writeText(content);notify('回答已复制');},'secondary'));box.append(actions);const references=box.querySelector('details summary');if(references)references.textContent='参考来源 · '+(project.qa_result.sources||[]).length+' 条（展开核对）';}};
 let editorialMode='read';
+function showParagraphSources(item){
+ let dialog=$('#paragraph-source-dialog');if(!dialog){dialog=el('dialog');dialog.id='paragraph-source-dialog';dialog.setAttribute('aria-label','段落引用来源');document.body.append(dialog);}
+ dialog.replaceChildren(el('h2','段落引用来源'),button('关闭',()=>dialog.close()),el('p','引用说明这段使用了哪些资料，不等于其中结论已核实。请对照原文、文件版本及判断过程。','muted'));
+ const quote=el('blockquote',item.text||'');dialog.append(quote);const ids=item.evidence_ids||[],sources=new Map((report.evidence_sources||[]).map(x=>[x.id,x]));
+ if(item.human_edited)dialog.append(el('p','本段经过人工编辑，原有引用不代表自动支持修改后的全部内容。','conflict'));
+ if(!ids.length)dialog.append(el('p','本段未关联来源。请核对原始资料，不能据此确认符合性结论。','conflict'));
+ for(const id of ids){const src=sources.get(id),card=el('article',undefined,'paragraph-source-card');
+  if(!src){card.append(el('strong','未找到引用快照'),el('p','证据ID：'+id),el('p','当前报告没有此证据的原文记录，不能用其他资料冒充该引用。','conflict'));}
+  else{card.append(el('strong',(src.source||'来源未注明')+' · '+(src.locator||'位置未注明')),el('small','证据ID：'+id),el('p',src.text||'引用快照没有保存原文，请核对原件。','paragraph-source-text'));if(src.version||src.validity_status)card.append(el('small','版本：'+(src.version||'未注明')+' · 有效状态：'+(src.validity_status||'未注明')));}
+  dialog.append(card);
+ }
+ if(!dialog.open)dialog.showModal();
+}
 function drawReadingView(){
  const preview=$('#reading-content');if(!preview||!report)return;preview.replaceChildren();
  const section=report.sections[currentChapter],rows=[...$('#paragraph-editor').querySelectorAll('.paragraph-block')],tables=[...$('#table-editor').querySelectorAll('.editor-table')];
@@ -188,7 +201,7 @@ function drawReadingView(){
    const locked=rows[block.index].querySelector('textarea').disabled;check.disabled=locked;checks.push({input:check,index:block.index});
    check.onchange=()=>{const n=checks.filter(x=>x.input.checked).length;countSelected.textContent='已选择 '+n+' 段';bulk.disabled=!n;};label.append(check,el('span','第'+(block.index+1)+'段'));
    const edit=button('编辑此段',()=>{setEditorialMode('edit');rows[block.index].querySelector('textarea').focus();rows[block.index].scrollIntoView({behavior:'smooth',block:'center'});});
-   const remove=button('删除此段',()=>removeRows([block.index]));remove.disabled=locked;edit.disabled=locked;actions.append(label,edit,remove);box.append(actions,el('p',item.text||'（空段落）'));preview.append(box);continue;
+   const remove=button('删除此段',()=>removeRows([block.index]));remove.disabled=locked;edit.disabled=locked;actions.append(label,button('查看来源',()=>showParagraphSources(item)),edit,remove);box.append(actions,el('p',item.text||'（空段落）'));preview.append(box);continue;
   }
   if(block.kind==='figure'){if(typeof renderDocumentFigurePreview==='function')preview.append(renderDocumentFigurePreview(section.figures[block.index],block.stale));continue;}
   const source=tables[block.index];if(!source)continue;

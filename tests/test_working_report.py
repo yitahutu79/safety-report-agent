@@ -128,3 +128,16 @@ def test_locked_subsection_is_rejected_before_any_generation_task(session,monkey
     assert '锁定' in json.load(e.value)['error'] and not calls
     req(route+'/generate',{**data,'subsections':{'1':['1.2 标准']}})
     assert calls[-1][-1] is True and calls[-1][-2]=={'1':['1.2 标准']}
+
+
+def test_report_sources_use_working_snapshot_and_historical_snapshot_separately(session):
+    target,route,req,base=session
+    original=versions.load_report(target);old=dict(original)
+    old['evidence']=[{'id':'cited','source':'原报告.docx','locator':'body[10]','text':'原报告中的旧结论。'},{'id':'unrelated','text':'不应展示的其他材料'}]
+    old['sections'][0]['paragraphs'][0]['evidence_ids']=['cited','missing']
+    versions.stage(target,old)
+    working=req(route+'/report')['report']
+    assert working['evidence_sources']==[old['evidence'][0]]
+    assert working['sections'][0]['paragraphs'][0]['evidence_ids']==['cited','missing']
+    assert req(route+'/report?version='+base)['report']['evidence_sources']==[]
+    assert len(versions.history(target))==1

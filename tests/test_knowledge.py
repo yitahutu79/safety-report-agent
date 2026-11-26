@@ -81,3 +81,41 @@ class KnowledgeBaseTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def test_approved_unknown_regulation_reports_exclusion_reason(tmp_path):
+    kb=KnowledgeBase(tmp_path/'kb.json')
+    record=kb.create(item(category='regulation',title='条文第一条',validity_status='unknown'))
+    kb.set_status(record['id'],'approved','审核人')
+    stored=kb.list()[0]
+    eligible,reason=kb.retrieval_eligibility(stored)
+    assert not eligible and '有效状态未知' in reason and '未纳入检索' in reason
+    assert kb._approved_chunks()==[]
+    revised=kb.update(record['id'],item(category='regulation',title='条文第一条',validity_status='current'))
+    assert not kb.retrieval_eligibility(revised)[0]
+    kb.set_status(record['id'],'approved','审核人')
+    assert kb.retrieval_eligibility(kb.list()[0])[0] and len(kb._approved_chunks())==1
+
+
+def test_reference_reading_unknown_regulation_keeps_report_filter_strict(tmp_path):
+    kb=KnowledgeBase(tmp_path/'kb.json')
+    r=kb.create(item(category='regulation',title='标准第一条',content='第一条说明制定目的。',validity_status='unknown'))
+    kb.set_status(r['id'],'approved','审核人')
+    with patch('safety_report.knowledge.HybridEvidenceIndex',FakeHybridIndex):
+        assert kb.search('标准第一条')==[]
+        found=kb.search('标准第一条',purpose='reference')
+        assert found and found[0]['validity_status']=='unknown'
+        assert kb.search('标准第一条')==[]
+    assert kb.list()[0]['validity_status']=='unknown'
+
+
+def test_single_approval_confirms_use_and_validity_without_second_setting(tmp_path):
+    kb=KnowledgeBase(tmp_path/'kb.json');r=kb.create(item(category='regulation',validity_status='unknown'))
+    approved=kb.set_status(r['id'],'approved','审核人',confirm_use=True)
+    assert approved['validity_status']=='current' and approved['status']=='approved'
+    assert approved['audit'][-1]['confirmed_use'] and kb._approved_chunks()
+    for invalid in ('repealed','superseded'):
+        other=kb.create(item(category='regulation',validity_status=invalid))
+        import pytest
+        with pytest.raises(ValueError,match='不能审核启用'):kb.set_status(other['id'],'approved','审核人',confirm_use=True)
+        assert next(x for x in kb.list() if x['id']==other['id'])['status']=='draft'
