@@ -1,0 +1,11 @@
+/* Keep dismissal in view without changing any dialog's form/content structure. */
+dialog.has-dialog-dismiss .dialog-dismiss-rail{position:sticky;top:0;height:0;z-index:40;pointer-events:none}
+dialog.has-dialog-dismiss .dialog-dismiss-button{display:grid;place-items:center;width:40px;height:40px;min-width:40px;flex:0 0 40px;padding:0;border:1px solid var(--design-line,var(--line,#dce3e8));border-radius:9px;background:var(--design-raised,#fff);color:var(--design-ink,var(--ink,#26364c));pointer-events:auto;cursor:pointer}
+dialog.has-dialog-dismiss .dialog-dismiss-button>span{font-size:26px;line-height:1}
+dialog.has-dialog-dismiss .dialog-dismiss-rail>.dialog-dismiss-button{position:absolute;right:0;top:0;box-shadow:0 2px 8px #10261c16}
+dialog.has-dialog-dismiss .dialog-dismiss-button:focus-visible{outline:2px solid var(--design-accent,#5142d8);outline-offset:3px}
+dialog.has-dialog-dismiss .dialog-dismiss-header{position:sticky;top:0;z-index:40;display:flex;align-items:center;justify-content:space-between;gap:16px;background:var(--design-raised,#fff)}
+dialog.has-dialog-dismiss .dialog-dismiss-header>:first-child{min-width:0}
+dialog.has-dialog-dismiss .dialog-dismiss-original{display:none!important}
+dialog.has-dialog-dismiss .dialog-dismiss-title{padding-inline-end:54px}
+@media(max-width:650px){dialog.has-dialog-dismiss .dialog-dismiss-header{gap:10px}}

@@ -58,11 +58,13 @@ setStudioKnowledgeTab('library');setKnowledgeFocus(knowledgePanel.dataset.focus|
 // Compact library rows and a readable detail sheet, retaining the original edit/review actions.
 let studioEntries=[];let studioCategories={};let studioActionRows=new Map();
 const studioDetail=el('dialog',undefined,'studio-detail-dialog');studioDetail.id='studio-knowledge-detail';document.body.append(studioDetail);studioDetail.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();studioDetail.close();}});
-function showStudioKnowledgeDetail(record){studioDetail.replaceChildren();const top=el('div',undefined,'studio-dialog-bar');top.append(el('strong','知识详情'),button('关闭',()=>studioDetail.close(),'secondary'));const head=el('div',undefined,'studio-detail-heading');head.append(studioIcon(record.category==='regulation'?'book-open':'file-text'),el('h2',record.title));const body=el('div',record.content,'studio-detail-body');const meta=el('dl',undefined,'studio-detail-meta');
+function showStudioKnowledgeDetail(record){studioDetail.dataset.knowledgeId=record.id;studioDetail.replaceChildren();const top=el('div',undefined,'studio-dialog-bar');top.append(el('strong','知识详情'),button('关闭',()=>studioDetail.close(),'secondary'));const head=el('div',undefined,'studio-detail-heading');head.append(studioIcon(record.category==='regulation'?'book-open':'file-text'),el('h2',record.title));const body=el('div',record.content,'studio-detail-body');const meta=el('dl',undefined,'studio-detail-meta');
  for(const [label,value] of [['知识分类',studioCategories[record.category]],['审核状态',kbStatusLabel(record.status)],['来源',record.source],['版本',record.version||'未注明'],['适用范围',record.applicability||'未注明'],['报告使用',record.retrieval_reason]]){meta.append(el('dt',label),el('dd',value||''));}
  if(record.source_url&&/^https?:\/\//i.test(record.source_url)){const link=el('a','打开原始来源 ↗');link.href=record.source_url;link.target='_blank';link.rel='noopener noreferrer';meta.append(el('dt','原始链接'),el('dd'));meta.lastChild.append(link);}
  const footer=el('div',undefined,'studio-detail-actions');footer.append(studioAction('编辑内容','file-text',()=>{studioDetail.close();kbFill(record);}));
+ const remove=studioAction('删除','trash',()=>deleteKnowledgeRecord(record,remove),'danger knowledge-delete');remove.setAttribute('aria-label','删除知识：'+record.title);footer.append(remove);
  studioDetail.append(top,head,meta,body,footer);studioDetail.show();top.querySelector('button').focus();}
+document.addEventListener('knowledge-record-deleted',event=>{if(studioDetail.dataset.knowledgeId===event.detail.id)studioDetail.close();if(studioEditDialog.open&&kbEditingId===event.detail.id)studioEditDialog.close();});
 function studioNeedsReview(record){return record.status==='draft'||(record.status==='approved'&&!record.retrieval_eligible);}
 function studioDisplayTitle(record){
  const original=record.title||'';

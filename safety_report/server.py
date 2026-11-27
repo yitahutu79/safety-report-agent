@@ -726,6 +726,8 @@ class Handler(BaseHTTPRequestHandler):
             static['/design-themes.js'] = ('design-themes.js', 'text/javascript; charset=utf-8')
             static['/design-themes.css'] = ('design-themes.css', 'text/css; charset=utf-8')
             static['/component-experience.js'] = ('component-experience.js', 'text/javascript; charset=utf-8')
+            static['/dialog-controls.js'] = ('dialog-controls.js', 'text/javascript; charset=utf-8')
+            static['/dialog-controls.css'] = ('dialog-controls.css', 'text/css; charset=utf-8')
             static['/component-experience.css'] = ('component-experience.css', 'text/css; charset=utf-8')
             static['/vendor/daisyui-kbd.css'] = ('vendor/daisyui-kbd.css', 'text/css; charset=utf-8')
             static['/vendor/daisyui-badge.css'] = ('vendor/daisyui-badge.css', 'text/css; charset=utf-8')
@@ -990,6 +992,11 @@ class Handler(BaseHTTPRequestHandler):
                 content = self.body(20_000_000)
                 if not content:
                     raise ValueError('文件为空')
+                digest = hashlib.sha256(content).hexdigest()
+                existing = knowledge_base().find_duplicate_document(file_sha256=digest)
+                if existing:
+                    return self.json({'count': 0, 'duplicate': True, 'existing_id': existing['id'],
+                        'existing_title': existing['title'], 'warnings': [], 'sha256': digest})
                 with tempfile.TemporaryDirectory(prefix='safety-public-import-') as temp:
                     file_path = Path(temp) / filename
                     file_path.write_bytes(content)
@@ -997,21 +1004,22 @@ class Handler(BaseHTTPRequestHandler):
                 chunks = parsed_doc['chunks']
                 if not chunks:
                     raise ValueError('文件未提取到文字；扫描件请先 OCR')
-                if len(chunks) > 100:
-                    raise ValueError('文件超过 100 个内容块，请分割后导入，避免导入不完整')
                 payloads = [{'category': category, 'title': filename + ' · ' + c['locator'] + ' · ' + str(c['offset']),
                     'content': c['text'], 'source': filename + ' · ' + c['locator'], 'source_url': '',
                     'applicability': '', 'version': '', 'effective_from': '', 'effective_to': '',
                     'validity_status': 'unknown' if category == 'regulation' else 'not_applicable'} for c in chunks]
-                records = knowledge_base().create_many(payloads)
-                return self.json({'count': len(records), 'warnings': parsed_doc['warnings'], 'sha256': parsed_doc['sha256']}, 201)
+                from .import_identity import joined_blocks
+                result = knowledge_base().import_chunks(payloads, parsed_doc['sha256'], joined_blocks(parsed_doc))
+                return self.json({**result, 'warnings': parsed_doc['warnings'], 'sha256': parsed_doc['sha256']}, 200 if result['duplicate'] else 201)
             if path == '/api/knowledge':
                 return self.json({'record': knowledge_base().create(self.input_json())}, 201)
-            knowledge_match = re.fullmatch(r'/api/knowledge/([a-f0-9]{32})/(update|status)', path)
+            knowledge_match = re.fullmatch(r'/api/knowledge/([a-f0-9]{32})/(update|status|delete)', path)
             if knowledge_match:
                 ident, operation = knowledge_match.groups()
                 data = self.input_json()
                 store = knowledge_base()
+                if operation == 'delete':
+                    return self.json(store.delete(ident, data.get('revision')))
                 record = (store.update(ident, data) if operation == 'update'
                           else store.set_status(ident, data.get('status', ''), data.get('reviewed_by', ''), confirm_use=data.get('confirm_use') is True))
                 return self.json({'record': record})
@@ -1310,15 +1318,33 @@ class Handler(BaseHTTPRequestHandler):
                     if not data:
                         raise ValueError('文件为空')
                     digest = hashlib.sha256(data).hexdigest()
-                    existing = next((f for f in state['files'] if f['sha256'] == digest and f.get('active', True) and f['role'] == info['role']), None)
+                    existing = next((f for f in state['files'] if f['sha256'] == digest), None)
                     if existing:
-                        return self.json({'ok': True, 'duplicate': True, 'message': '相同内容已在项目中，已跳过重复上传'})
+                        return self.json({'ok': True, 'duplicate': True, 'file_id': existing['id'],
+                            'message': '相同内容已在项目中（'+existing['name']+'），已跳过重复上传；可在原记录调整用途或恢复使用'})
+                    from .import_identity import quick_upload_text, document_keys, joined_blocks
+                    text = quick_upload_text(data, filename)
+                    text_keys = document_keys(text) if text else set()
+                    previous = load(target/'analysis.json', {}) if text_keys else {}
+                    parsed_documents = {doc['file']: doc for doc in previous.get('documents', [])+previous.get('reference_documents', [])}
+                    for file in state['files']:
+                        known_keys = set(file.get('text_keys', []))
+                        old_doc = parsed_documents.get(file['stored'])
+                        if old_doc and old_doc.get('sha256') == file['sha256']:
+                            known_keys.update(document_keys(joined_blocks(old_doc)))
+                        if text_keys.intersection(known_keys):
+                            return self.json({'ok': True, 'duplicate': True, 'file_id': file['id'],
+                                'message': '提取正文与项目现有资料“'+file['name']+'”一致，已跳过重复上传'})
+                    known_law = knowledge_base().find_duplicate_document(digest, text, category='regulation')
+                    if known_law:
+                        return self.json({'ok': True, 'duplicate': True, 'knowledge_duplicate': True,
+                            'existing_id': known_law['id'], 'message': '知识库已存在相同法规文本“'+known_law['title']+'”，无需重复上传；请到知识库核对并启用'})
                     if len(state['files']) >= 100 or sum(f['size'] for f in state['files']) + len(data) > 600_000_000:
                         raise ValueError('每个项目最多 100 个文件、总计 600 MB')
                     ident = secrets.token_hex(8)
                     stored = ident + '_' + filename
                     (target / 'uploads' / stored).write_bytes(data)
-                    state['files'].append({'id': ident, 'name': filename, 'stored': stored, 'size': len(data), 'sha256': digest, 'active': True,
+                    state['files'].append({'id': ident, 'name': filename, 'stored': stored, 'size': len(data), 'sha256': digest, 'active': True, 'text_keys': sorted(text_keys),
                         'document_type': suggest_document_type(filename), 'document_source': '', 'document_date': '', 'document_version': '', **info})
                     state_update(target, files=state['files'], analysis_dirty=state['analysis_dirty'] or info['role'] == 'source',
                         report_outdated=(target / 'report.json').exists() or (target / 'report.docx').exists(),

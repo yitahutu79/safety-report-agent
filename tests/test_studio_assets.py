@@ -14,7 +14,7 @@ def test_studio_assets_are_served_locally(tmp_path, monkeypatch):
     thread.start()
     base = f'http://127.0.0.1:{http.server_port}'
     try:
-        for route, content_type in [('/report-preview.js', 'text/javascript'), ('/component-experience.js', 'text/javascript'), ('/component-experience.css', 'text/css'), ('/vendor/daisyui-kbd.css', 'text/css'), ('/vendor/daisyui-badge.css', 'text/css'), ('/studio-ui.js', 'text/javascript'), ('/studio-ui.css', 'text/css'), ('/design-themes.js', 'text/javascript'), ('/design-themes.css', 'text/css')]:
+        for route, content_type in [('/dialog-controls.js', 'text/javascript'), ('/dialog-controls.css', 'text/css'), ('/report-preview.js', 'text/javascript'), ('/component-experience.js', 'text/javascript'), ('/component-experience.css', 'text/css'), ('/vendor/daisyui-kbd.css', 'text/css'), ('/vendor/daisyui-badge.css', 'text/css'), ('/studio-ui.js', 'text/javascript'), ('/studio-ui.css', 'text/css'), ('/design-themes.js', 'text/javascript'), ('/design-themes.css', 'text/css')]:
             with urlopen(base + route, timeout=5) as response:
                 assert response.status == 200
                 assert response.headers.get_content_type() == content_type
@@ -38,6 +38,7 @@ def test_studio_assets_are_served_locally(tmp_path, monkeypatch):
             scripts.feed(response.read().decode())
         assert scripts.sources.index('/report-preview.js') < scripts.sources.index('/app.js')
         assert scripts.sources.index('/report-preview.js') < scripts.sources.index('/product-design.js')
+        assert scripts.sources.index('/dialog-controls.js') > scripts.sources.index('/component-experience.js')
         icons = list((server.ROOT / 'web' / 'ui-icons').glob('*.svg'))
         assert icons
         for icon in icons:

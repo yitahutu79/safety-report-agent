@@ -226,3 +226,5 @@ body.studio-ui{--ink:#20252c;--muted:#657080;--line:#e7e9ed;--bg:#f6f7f9;--green
 .studio-ui #projects .project-trash-button .studio-icon{width:16px;height:16px;opacity:.55}
 .studio-ui #projects .project-trash-button:hover{background:#c6454512;color:#b6483c}
 .studio-ui #projects .project-trash-button:hover .studio-icon{opacity:.9}
+body.studio-ui[data-design-theme] :is(.studio-row-actions,.studio-detail-actions) button.knowledge-delete{color:#ad382f;border-color:#e6c4c0}
+body.studio-ui[data-design-theme=linear] :is(.studio-row-actions,.studio-detail-actions) button.knowledge-delete{color:#ffb4ab;border-color:#754d49}

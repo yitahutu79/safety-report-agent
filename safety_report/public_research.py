@@ -218,16 +218,20 @@ def import_candidate(data, ident, kb):
     receipt = root(data) / (info['sha256']+'.import.json')
     with LOCK:
         if receipt.exists():
-            return {**json.loads(receipt.read_text()), 'already_imported': True}
+            saved = json.loads(receipt.read_text())
+            active = {r['id'] for r in kb.list()}
+            if saved.get('record_ids') and set(saved['record_ids']) <= active:
+                return {**saved, 'already_imported': True}
         from .documents import parse_file
         parsed = parse_file(root(data) / info['file'])
         chunks = parsed['chunks']
         if not chunks or len(chunks) > 100 or any(len(c['text']) > 30000 for c in chunks):
             raise ValueError('正文为空或过长，请下载后分批导入；扫描件需先 OCR')
-        records = kb.create_many([{'category': 'regulation', 'title': (info['title'][:150]+' · '+c['locator'])[:200],
+        from .import_identity import joined_blocks
+        imported = kb.import_chunks([{'category': 'regulation', 'title': (info['title'][:150]+' · '+c['locator'])[:200],
             'content': c['text'], 'source': (info['title'][:200]+' · '+c['locator'])[:300],
-            'source_url': info['source_url'], 'validity_status': 'unknown'} for c in chunks])
-        result = {'count': len(records), 'record_ids': [r['id'] for r in records], 'warnings': parsed['warnings'],
+            'source_url': info['source_url'], 'validity_status': 'unknown'} for c in chunks], info['sha256'], joined_blocks(parsed))
+        result = {**imported, 'warnings': parsed['warnings'],
                   'sha256': info['sha256'], 'source_url': info['source_url'], 'downloaded_at': info['downloaded_at']}
         receipt.write_text(json.dumps(result, ensure_ascii=False), encoding='utf-8')
         return result

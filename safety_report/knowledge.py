@@ -132,6 +132,53 @@ class KnowledgeBase:
             self._invalidate_index()
         return records
 
+    def find_duplicate_document(self, file_sha256='', text='', category=None):
+        from .import_identity import find_duplicate
+        with self.lock:
+            record = find_duplicate(self._read(), file_sha256, text, category)
+            return dict(record) if record else None
+
+    def import_chunks(self, payloads, file_sha256, text):
+        """Check existing whole documents and old fragments under the write lock."""
+        from .import_identity import find_duplicate, document_keys, chunk_key
+        with self.lock:
+            data = self._read()
+            existing = find_duplicate(data, file_sha256, text)
+            if existing:
+                return {'count': 0, 'duplicate': True, 'existing_id': existing['id'],
+                        'existing_title': existing['title'], 'record_ids': [existing['id']]}
+            if not isinstance(payloads, list) or not 1 <= len(payloads) <= 100:
+                raise ValueError('文件需要1至100个可读取内容块，请拆分较大的文件后导入')
+            timestamp = _now()
+            records = []
+            for payload in payloads:
+                item = self._clean(payload)
+                records.append({'id': uuid.uuid4().hex, **item, 'status': 'draft', 'revision': 1,
+                    'created_at': timestamp, 'updated_at': timestamp, 'reviewed_by': '',
+                    'history': [], 'audit': [{'action': 'imported', 'at': timestamp, 'status': 'draft', 'revision': 1}]})
+            # Reuse unchanged chunks only within this exact document/version.
+            keys = document_keys(text)
+            reused = {}
+            by_id = {r['id']: r for r in data['records'] if not r.get('migrated_to')}
+            for manifest in data.get('document_imports', []):
+                if keys.intersection(manifest.get('text_keys', [])):
+                    for part in manifest.get('records', []):
+                        record = by_id.get(part['id'])
+                        if record and chunk_key(record['content']) == part['hash']:
+                            reused.setdefault(part['hash'], record)
+            selected = []; added = []
+            for record in records:
+                known = reused.get(chunk_key(record['content']))
+                selected.append(known or record)
+                if not known: added.append(record)
+            data['records'].extend(added)
+            data.setdefault('document_imports', []).append({'file_sha256': file_sha256,
+                'text_keys': sorted(keys), 'records': [{'id': r['id'], 'hash': chunk_key(r['content'])} for r in selected]})
+            self._write(data)
+            self._invalidate_index()
+            return {'count': len(added), 'duplicate': not added, 'skipped': len(selected)-len(added),
+                    'record_ids': [r['id'] for r in selected]}
+
     def update(self, ident, payload):
         item = self._clean(payload)
         with self.lock:
@@ -149,6 +196,26 @@ class KnowledgeBase:
             self._write(data)
             self._invalidate_index()
             return record
+
+    def delete(self, ident, revision):
+        """Remove from active knowledge and retrieval; retain an audit-only archive."""
+        if type(revision) is not int or revision < 1:
+            raise ValueError('请刷新知识库后再删除')
+        with self.lock:
+            data = self._read()
+            record = next((r for r in data['records'] if r['id'] == ident), None)
+            if not record:
+                raise ValueError('知识条目已不存在，请刷新列表')
+            if record['revision'] != revision:
+                raise ValueError('知识条目已被修改，请刷新后重新核对再删除')
+            timestamp = _now()
+            record['deleted_at'] = timestamp
+            record['audit'].append({'action': 'deleted', 'at': timestamp, 'revision': revision})
+            data.setdefault('deleted_records', []).append(record)
+            data['records'] = [r for r in data['records'] if r['id'] != ident]
+            self._write(data)
+            self._invalidate_index()
+            return {'deleted_id': ident, 'title': record['title']}
 
     def set_status(self, ident, status, reviewer='', confirm_use=False):
         if status not in STATUSES:
